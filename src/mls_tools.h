@@ -16,7 +16,7 @@
   #include <WString.h>
   
   #define JSON_SIZE 1024
-  const String spiffs_filename      = "/mls.ini";
+  const String spiffs_filename = "/mls.ini";
   
   // https://arduinojson.org/
   #include <ArduinoJson.h>
