@@ -45,7 +45,7 @@
       Config configRead;
       void spiffs_init();
       void loadConfiguration(String default_iid);
-      void saveConfiguration();
+      bool saveConfiguration();
       void importConfiguration(String jsonImport);
       bool useDefaultSsid();
   

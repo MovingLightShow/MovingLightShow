@@ -128,7 +128,7 @@ void MlsTools::importConfiguration(String jsonImport) {
 }
 
 
-void MlsTools::saveConfiguration() {
+bool MlsTools::saveConfiguration() {
 
   char jsonActual[JSON_SIZE];
 
@@ -163,17 +163,19 @@ void MlsTools::saveConfiguration() {
     File file = SPIFFS.open(spiffs_filename, "w");
     if (!file) {
       DEBUG_PRINTLN("Failed to create file");
-      return;
+      return false;
     }
     if (serializeJson(doc, file) == 0) {
-      DEBUG_PRINTLN("Failed to write to file");
+      DEBUG_PRINTLN("Failed to write configuration file");
     } else {
-      DEBUG_PRINTLN("configuration file saved");
+      DEBUG_PRINTLN("Configuration file saved");
     }
     // Close the file
     file.close();
+    return true;
   } else {
-    DEBUG_PRINTLN("configuration file was not changed");
+    DEBUG_PRINTLN("Identical configuration unchanged");
+    return false;
   }
 
 }
@@ -188,32 +190,32 @@ bool MlsTools::useDefaultSsid() {
 
 void MlsTools::spiffs_init() {
 
-  DEBUG_PRINTLN("Inizializing SPIFFS");
+  DEBUG_PRINTLN();
+  DEBUG_PRINTLN("Initializing SPIFFS");
   if (SPIFFS.begin()) {
-    DEBUG_PRINTLN("SPIFFS mounted correctly.");
+    DEBUG_PRINTLN("SPIFFS mounted correctly");
     this->spiffs_available = true;
   } else {
-    DEBUG_PRINTLN("Error during SPIFFS mounting.");
+    DEBUG_PRINTLN("Error during SPIFFS mounting");
     bool formatted = SPIFFS.format();
     if (formatted) {
-      DEBUG_PRINTLN("SPIFFS formatted successfully.");
+      DEBUG_PRINTLN("SPIFFS formatted successfully");
       if (SPIFFS.begin()) {
-        DEBUG_PRINTLN("SPIFFS mounted correctly.");
+        DEBUG_PRINTLN("SPIFFS mounted correctly");
         this->spiffs_available = true;
       } else {
-        DEBUG_PRINTLN("Error during SPIFFS mounting.");
+        DEBUG_PRINTLN("Error during SPIFFS mounting");
       }
     } else {
       DEBUG_PRINTLN("Error while formatting SPIFFS");
     }
   }
 
-  #ifdef DEBUG
-    /// SPIFFS information /// SPIFFS information /// SPIFFS information /// SPIFFS information ///
-    if (this->spiffs_available) {
-      DEBUG_PRINTLN("Total SPIFFS space available: " + String(SPIFFS.totalBytes()) + " bytes");
-      DEBUG_PRINTLN("Total SPIFFS space used: " + String(SPIFFS.usedBytes()) + " bytes");
-    }
-  #endif
+  /// SPIFFS information /// SPIFFS information /// SPIFFS information /// SPIFFS information ///
+  if (this->spiffs_available) {
+    DEBUG_PRINTLN("Total SPIFFS space available: " + String(SPIFFS.totalBytes()) + " bytes");
+    DEBUG_PRINTLN("Total SPIFFS space used: " + String(SPIFFS.usedBytes()) + " bytes");
+  }
+  DEBUG_PRINTLN();
 
 }

@@ -52,36 +52,44 @@ bool MlsOta::checkOtaUpdates(String ota_iid) {
     DEBUG_PRINTLN("Local firmware version: " + this->actual_firmware);
 
     online_version.trim();
+    fwURL.concat("&download=");
+    fwURL.concat(online_version);
+    strcpy(this->new_firmware_url, fwURL.c_str());
     if (!online_version.equals(this->actual_firmware)) {
-      fwURL.concat("&download=");
-      fwURL.concat(online_version);
       ota_check_result = true;
-      strcpy(this->new_firmware_url, fwURL.c_str());
       DEBUG_PRINTLN("Firmware uppdate available");
     } else {
       DEBUG_PRINTLN("Firmware is already up to date");
     }
   } else {
     DEBUG_PRINTF("Http error (%d)", httpCode);
-    DEBUG_PRINTLN();
   }
+  DEBUG_PRINTLN();
   httpClient.end();
   return ota_check_result;
 }
 
 
 void MlsOta::otaUpdates() {
+
   WiFiClient client;
   t_httpUpdate_return ret = httpUpdate.update(client, this->new_firmware_url);
   switch(ret) {
     case HTTP_UPDATE_FAILED:
       DEBUG_PRINTFF("HTTP_UPDATE_FAILED Error (%d): %s", httpUpdate.getLastError(), httpUpdate.getLastErrorString().c_str());
+      DEBUG_PRINTLN();
       break;
 
     case HTTP_UPDATE_NO_UPDATES:
       DEBUG_PRINTFF("HTTP_UPDATE_NO_UPDATES (%d): %s", httpUpdate.getLastError(), httpUpdate.getLastErrorString().c_str());
+      DEBUG_PRINTLN();
+      break;
+
+    case HTTP_UPDATE_OK:
+      DEBUG_PRINTLN("Successful update");
       break;
   }
+
 }
 
 
