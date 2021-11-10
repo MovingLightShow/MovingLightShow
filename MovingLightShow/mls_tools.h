@@ -10,12 +10,11 @@
 #ifndef MLS_TOOLS_H
 #define MLS_TOOLS_H
 
-  #define DEBUG_MLS
+  #include "mls_config.h"
   #include "DebugTools.h"
 
   #include <WString.h>
   
-  #define JSON_SIZE 1024
   const String spiffs_filename = "/mls.ini";
   
   // https://arduinojson.org/
@@ -26,20 +25,21 @@
 
 
   class MlsTools {
-    
     public:
       MlsTools();
       struct Config {
-        char iid[4]; // 3 chars and /0
-        char ssid1[64];
+        char iid[4]; // 3 chars + /0
+        char uniqueid[UNIQUEID_CHAR_SIZE];
+        char ssid1[SSID_CHAR_SIZE];
         int ssid1validated;
-        char secret1[64];
-        char ssid2[64];
+        char secret1[SECRET_CHAR_SIZE];
+        char ssid2[SSID_CHAR_SIZE];
         int ssid2validated;
-        char secret2[64];
+        char secret2[SECRET_CHAR_SIZE];
         int master;
         int rank;
         int column;
+        int remote;
       };
       Config config;
       Config configRead;
@@ -51,9 +51,9 @@
   
     private:
       char jsonRead[JSON_SIZE];
+      char jsonActual[JSON_SIZE];
       bool spiffs_available;
       bool disableDefauldSsid;
-  
   };
 
 #endif

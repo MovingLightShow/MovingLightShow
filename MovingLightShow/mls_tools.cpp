@@ -12,17 +12,12 @@
 
 
 MlsTools::MlsTools() {
-
   this->spiffs_available = false;
   this->disableDefauldSsid = false;
-
 }
 
 
 void MlsTools::loadConfiguration(String default_iid) {
-
-  char jsonActual[JSON_SIZE];
-
   // Open file for reading
   File file = SPIFFS.open(spiffs_filename);
 
@@ -34,12 +29,15 @@ void MlsTools::loadConfiguration(String default_iid) {
   if (error)
     DEBUG_PRINTLN("Failed to read file, using default configuration");
 
-  serializeJson(doc, jsonRead);
+  serializeJson(doc, this->jsonRead);
 
   // Copy values from the JsonDocument to the config
   strlcpy(this->config.iid,
           doc["iid"] | default_iid.c_str(),
           sizeof(this->config.iid));
+  strlcpy(this->config.uniqueid,
+          doc["uniqueid"] | default_iid.c_str(),
+          sizeof(this->config.uniqueid));
   strlcpy(this->config.ssid1,
           doc["ssid1"] | "",
           sizeof(this->config.ssid1));
@@ -57,6 +55,7 @@ void MlsTools::loadConfiguration(String default_iid) {
   this->config.master = doc["master"] | 0;
   this->config.rank   = doc["rank"]   | 0;
   this->config.column = doc["column"] | 0;
+  this->config.remote = doc["remote"] | 0;
 
   this->disableDefauldSsid = ((this->config.ssid1validated != 0) || (this->config.ssid2validated != 0));
 
@@ -64,6 +63,9 @@ void MlsTools::loadConfiguration(String default_iid) {
   strlcpy(this->configRead.iid,
           this->config.iid,
           sizeof(this->configRead.iid));
+  strlcpy(this->configRead.uniqueid,
+          this->config.uniqueid,
+          sizeof(this->configRead.uniqueid));
   strlcpy(this->configRead.ssid1,
           this->config.ssid1,
           sizeof(this->configRead.ssid1));
@@ -81,19 +83,16 @@ void MlsTools::loadConfiguration(String default_iid) {
   this->configRead.master = this->config.master;
   this->configRead.rank   = this->config.rank;
   this->configRead.column = this->config.column;
+  this->configRead.remote = this->config.remote;
 
-  serializeJson(doc, jsonActual);
-  DEBUG_PRINTLN("Json content: " + String(jsonActual));
+  serializeJson(doc, this->jsonActual);
+  DEBUG_PRINTLN("Json content: " + String(this->jsonActual));
 
   file.close();
-
 }
 
 
 void MlsTools::importConfiguration(String jsonImport) {
-
-  char jsonActual[JSON_SIZE];
-
   // Use arduinojson.org/v6/assistant to compute the capacity.
   StaticJsonDocument<JSON_SIZE> doc;
 
@@ -106,6 +105,9 @@ void MlsTools::importConfiguration(String jsonImport) {
   strlcpy(this->config.iid,
           doc["iid"] | this->config.iid,
           sizeof(this->config.iid));
+  strlcpy(this->config.uniqueid,
+          doc["uniqueid"] | this->config.uniqueid,
+          sizeof(this->config.uniqueid));
   strlcpy(this->config.ssid1,
           doc["ssid1"] | this->config.ssid1,
           sizeof(this->config.ssid1));
@@ -121,17 +123,14 @@ void MlsTools::importConfiguration(String jsonImport) {
   this->config.master = doc["master"] | this->config.master,
   this->config.rank   = doc["rank"]   | this->config.rank,
   this->config.column = doc["column"] | this->config.column,
+  this->config.remote = doc["remote"] | this->config.remote,
 
-  serializeJson(doc, jsonActual);
-  DEBUG_PRINTLN("Json content: " + String(jsonActual));
-
+  serializeJson(doc, this->jsonActual);
+  DEBUG_PRINTLN("Json content: " + String(this->jsonActual));
 }
 
 
 bool MlsTools::saveConfiguration() {
-
-  char jsonActual[JSON_SIZE];
-
   // Use arduinojson.org/assistant to compute the capacity.
   StaticJsonDocument<JSON_SIZE> doc;
 
@@ -145,6 +144,7 @@ bool MlsTools::saveConfiguration() {
 
   // Set the values in the document
   doc["iid"]            = this->config.iid;
+  doc["uniqueid"]       = this->config.uniqueid;
   doc["ssid1"]          = this->config.ssid1;
   doc["ssid1validated"] = this->config.ssid1validated;
   doc["secret1"]        = this->config.secret1;
@@ -154,10 +154,11 @@ bool MlsTools::saveConfiguration() {
   doc["master"]         = this->config.master;
   doc["rank"]           = this->config.rank;
   doc["column"]         = this->config.column;
+  doc["remote"]         = this->config.remote;
 
   // Serialize JSON to file only if changed
-  serializeJson(doc, jsonActual);
-  if (strcmp(jsonActual, jsonRead) != 0) {
+  serializeJson(doc, this->jsonActual);
+  if (strcmp(this->jsonActual, this->jsonRead) != 0) {
 
     // Open file for writing
     File file = SPIFFS.open(spiffs_filename, "w");
@@ -165,6 +166,7 @@ bool MlsTools::saveConfiguration() {
       DEBUG_PRINTLN("Failed to create file");
       return false;
     }
+
     if (serializeJson(doc, file) == 0) {
       DEBUG_PRINTLN("Failed to write configuration file");
     } else {
@@ -177,19 +179,15 @@ bool MlsTools::saveConfiguration() {
     DEBUG_PRINTLN("Identical configuration unchanged");
     return false;
   }
-
 }
 
 
 bool MlsTools::useDefaultSsid() {
-  
   return (!this->disableDefauldSsid);
-
 }
 
 
 void MlsTools::spiffs_init() {
-
   DEBUG_PRINTLN();
   DEBUG_PRINTLN("Initializing SPIFFS");
   if (SPIFFS.begin()) {
@@ -217,5 +215,4 @@ void MlsTools::spiffs_init() {
     DEBUG_PRINTLN("Total SPIFFS space used: " + String(SPIFFS.usedBytes()) + " bytes");
   }
   DEBUG_PRINTLN();
-
 }

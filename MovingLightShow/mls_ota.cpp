@@ -15,13 +15,11 @@
 
 
 MlsOta::MlsOta(String ota_url, String actual_firmware) {
-
   this->ota_url = ota_url;
   this->actual_firmware = actual_firmware;
   uint8_t mac[6];
   WiFi.macAddress(mac);
   sprintf(this->macAddr,"%02x%02x%02x%02x%02x%02x", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]); /// small letters at MAC address
-
 }
 
 
@@ -39,6 +37,10 @@ bool MlsOta::checkOtaUpdates(String ota_iid) {
   fwURL.concat(ARDUINO_VARIANT);
   fwURL.concat("&firmware=");
   fwURL.concat(this->actual_firmware);
+  fwURL.concat("&releasedate=");
+  fwURL.concat(this->urlencode(__DATE__));
+  fwURL.concat(this->urlencode(", "));
+  fwURL.concat(this->urlencode(__TIME__));
   DEBUG_PRINTLN("Check for firmware update using this URL: " + fwURL);
 
   HTTPClient httpClient;
@@ -71,7 +73,6 @@ bool MlsOta::checkOtaUpdates(String ota_iid) {
 
 
 void MlsOta::otaUpdates() {
-
   WiFiClient client;
   t_httpUpdate_return ret = httpUpdate.update(client, this->new_firmware_url);
   switch(ret) {
@@ -89,12 +90,10 @@ void MlsOta::otaUpdates() {
       DEBUG_PRINTLN("Successful update");
       break;
   }
-
 }
 
 
 String MlsOta::otaDownloadOptions(MlsTools::Config config) {
-
   WiFiClient client;
   String fwURL = this->ota_url;
   String http_result;
@@ -106,7 +105,13 @@ String MlsOta::otaDownloadOptions(MlsTools::Config config) {
   fwURL.concat(this->urlencode(ARDUINO_VARIANT));
   fwURL.concat("&firmware=");
   fwURL.concat(this->actual_firmware);
+  fwURL.concat("&releasedate=");
+  fwURL.concat(this->urlencode(__DATE__));
+  fwURL.concat(this->urlencode(", "));
+  fwURL.concat(this->urlencode(__TIME__));
   fwURL.concat("&cnf=1");
+  fwURL.concat("&uniqueid=");
+  fwURL.concat(this->urlencode(config.uniqueid));
   fwURL.concat("&ssid1=");
   fwURL.concat(this->urlencode(config.ssid1));
   fwURL.concat("&ssid2=");
@@ -117,6 +122,8 @@ String MlsOta::otaDownloadOptions(MlsTools::Config config) {
   fwURL.concat(config.rank);
   fwURL.concat("&column=");
   fwURL.concat(config.column);
+  fwURL.concat("&remote=");
+  fwURL.concat(config.remote);
   DEBUG_PRINTLN("Configuration information sent: " + fwURL);
 
   HTTPClient httpClient;
@@ -131,13 +138,11 @@ String MlsOta::otaDownloadOptions(MlsTools::Config config) {
   }
   httpClient.end();
   return http_result;
-
 }
 
 
 // https://stackoverflow.com/questions/9072320/split-string-into-string-array
 String MlsOta::getValue(String data, char separator, int index) {
-
   int found = 0;
   int strIndex[] = {0, -1};
   int maxIndex = data.length()-1;
@@ -151,13 +156,11 @@ String MlsOta::getValue(String data, char separator, int index) {
   }
 
   return found>index ? data.substring(strIndex[0], strIndex[1]) : "";
-
 }
 
 
 // https://github.com/zenmanenergy/ESP8266-Arduino-Examples/
 String MlsOta::urlencode(String str) {
-
   String encodedString="";
   char c;
   char code0;
@@ -188,5 +191,4 @@ String MlsOta::urlencode(String str) {
     yield();
   }
   return encodedString;
-
 }

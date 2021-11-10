@@ -10,52 +10,35 @@
 #ifndef MOVING_LIGHT_SHOW_H
 #define MOVING_LIGHT_SHOW_H
   
-  #define DEBUG_MLS
+  #include "mls_config.h"
   #include "DebugTools.h"
+  #include "mls_mesh.h"
   #include "mls_light_effects.h"
+  #include "driver/i2s.h"
 
   // https://github.com/FastLED/FastLED
-  #define FASTLED_ALLOW_INTERRUPTS 0
   #include "FastLED.h"
   
-  #define INITIAL_IID "MLS"
-  #define OTA_URL "http://movinglightshow.art/"
+  /**********************************************************************
 
-  #define DEFAULT_WIFI_SSID   "IOT_NETWORK"
-  #define DEFAULT_WIFI_SECRET "gzfh-dkse-6943-dfrt"
+                    !!! IMPORTANT PINOUT INFORMATION !!!
+  
+    PIN 12 must NEVER be at Vcc during boot sequence
+    Strapping pin: GPIO0, GPIO2, GPIO5, GPIO12 (MTDI), and GPIO15 (MTDO) are strapping pins.
+      For more infomation, please refer to ESP32 datasheet.
+    SPI0/1: GPIO6-11 and GPIO16-17 are usually connected to the SPI flash and PSRAM integrated
+      on the module and therefore should not be used for other purposes.
+    JTAG: GPIO12-15 are usually used for inline debug.
+    GPI: GPIO34-39 can only be set as input mode and do not have software-enabled pullup or pulldown functions.
+    TXD & RXD are usually used for flashing and debugging.
+      ADC2: ADC2 pins cannot be used when Wi-Fi is used. So, if you’re using Wi-Fi and you’re having trouble
+      getting the value from an ADC2 GPIO, you may consider using an ADC1 GPIO instead, that should solve
+      your problem. For more details, please refer to ADC limitations.
 
-  #define LED_TYPE WS2812B
-  #define LED_COLOR_ORDER GRB
-  #define NUM_LEDS_PER_STRIP 18 // (18 LEDs, 30cm)
-  #define LED_TEST_BRIGHTNESS    63
-  #define LED_CONFIG_BRIGHTNESS  63
-  #define LED_MAX_BRIGHTNESS    255
-  #define LED_MIN_BRIGHTNESS     15
-
-  #ifdef ARDUINO_ESP32_DEV
-    #define ROTARY_ENCODER_BUTTON_PIN 12 // This PIN must NEVER be at 5V during boot !
-    #define ROTARY_ENCODER_A_PIN      13
-    #define ROTARY_ENCODER_B_PIN      14
-    #define MASTER_PIN                34
-    #define LEFT_LEDS_PIN             32
-    #define RIGHT_LEDS_PIN            33
-  #endif
-
-  #ifdef ARDUINO_TTGO_LoRa32_v21new
-    #define ROTARY_ENCODER_BUTTON_PIN 12 // This PIN must NEVER be at 5V during boot !
-    #define ROTARY_ENCODER_A_PIN      13
-    #define ROTARY_ENCODER_B_PIN      14
-    #define MASTER_PIN                34
-    #define LEFT_LEDS_PIN             36
-    #define RIGHT_LEDS_PIN            39
-
-    #define ONBOARD_LED     LED_BUILTIN
-    #define LED_BUILDIN_ON         HIGH
-    #define LED_BUILDIN_OFF         LOW
-  #endif
-
-  #define ROTARY_ENCODER_STEPS    8
-  #define ROTARY_ENCODER_VCC_PIN -1
+   Based on: https://randomnerdtutorials.com/esp32-pinout-reference-gpios/
+             https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-reference/peripherals/gpio.html
+      
+   **********************************************************************/
 
   CRGB leftLeds[NUM_LEDS_PER_STRIP];
   CRGB rightLeds[NUM_LEDS_PER_STRIP];
@@ -77,18 +60,34 @@
   #define CONFIG_COLUMN 0
   #define CONFIG_RANK   1
 
-  #define SSID_REPEAT_TRIAL_TIME  100000 // 0.1 seconds = 100'000 microseconds
-  #define SSID_TRIAL_MAX_TIME    6000000 // 6 seconds
-
-  #define CONFIG_MAX_TIME       30000000 // 30 seconds
-
   String tempString;
+
+  const i2s_port_t I2S_PORT = I2S_NUM_0;
+  bool i2sEnabled = false;
+
+  uint32_t i2s_rolling_mean[I2S_ROLLING_MEAN_SIZE];
+  uint32_t i2s_rollingmaxInput = 0;
+  uint32_t i2s_sampleCounter = 0;
+  uint32_t i2s_long_term_mean = 0;
+  uint32_t i2s_biggestInput = 0;
+  uint32_t i2s_maxInput = 0;
+  uint32_t i2s_maxInputTime = 0;
+  uint32_t i2s_secondtMaxInput = 0;
+  uint32_t i2s_inputFlushTime = 1000000; // was 2 seconds, in microseconds
+  uint32_t i2s_maxInputFlushTime = 2000000; // was 4 seconds, in microseconds
+  uint32_t lastEdgeDectionTime = 0; // in microseconds
+  uint32_t lastEdgeDectionLevel = 0;
+  bool overLastEdgeDectionLevel = false;
+  uint32_t minEdgeDetectionGap = 300000; // was 100 milliseconds, in microseconds
+  uint32_t maxEdgeDetectionGap = 600000; // was 300 milliseconds, in microseconds
+  uint32_t detectedBeatCounter = 0;
 
   bool result = false;
   bool forceFirmwareUpdate = false;
-  bool masterMode = false;
+  uint8_t forceFirmwareUpdateTrial = 0;
 
-  uint8_t state = STATE_START;
+  uint8_t state     = STATE_START;
+  uint8_t lastState = STATE_START;
 
   uint8_t wifiStep = WIFI_SCAN_START;
 
@@ -99,17 +98,38 @@
   uint32_t ssidLastTrialTime = 0;
   uint32_t ssidTrialTime = 0;
 
-  uint8_t runningBrightness = (LED_MAX_BRIGHTNESS + 1)/16;
+  uint32_t configMaxTime = CONFIG_MAX_TIME;
 
+  uint8_t runningBrightness;
 
   bool flashEnable = false;
   bool flashLastState = false;
 
-  uint32_t simulatorBeat = 0;
+  bool MLS_masterMode = false;
+  bool MLS_remoteControl = false;
+
+  bool LoraIsUp = false;
+
+  uint8_t bleEffect = 0;
+  char bleParams[JSON_SIZE];
+
+  uint8_t loraCommand = 0;
+
+  uint8_t simulatorBeat = 0;
   uint32_t simulatorLastBeat = 0;
   uint32_t simulatorBeatSpeed = 500; // (in ms, = 0.5s
   uint8_t simulatorEffect = EFFECT_NONE;
 
   TaskHandle_t TaskUpdateLightHandle = NULL;
-  
+
+  String lora_rssi = "--";
+  String lora_packSize = "--";
+  String lora_packet;
+
+  uint8_t announced_devices = 123;
+
+  struct LIGHT_PACKET light_packet;
+  struct ACTION_PACKET action_packet;
+  uint8_t dummy_payload[20];
+
 #endif
