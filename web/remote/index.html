@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<!-- Moving Light Show remote control                          *
+     https://MovingLightShow.art - contact@movinglightshow.art *
+     Version 1.0.8.4                                           *
+     (c) 2020-2021 Showband Les Armourins                      *
+-->
+<html lang="en">
+  <head>
+    <!-- <base href="./1.0.8.4/"> -->
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, minimum-scale=0.5, maximum-scale=2.0, viewport-fit=cover">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <!-- possible content values: default, black or black-translucent -->
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <title>Moving Light Show Remote Control</title>
+    <link rel="stylesheet" href="css/bulma.min.css" />
+    <link href="fontawesome/css/all.min.css" rel="stylesheet" /><!--load all styles -->
+    <link rel="stylesheet" href="css/remote.css" />
+    <link rel="manifest" href="manifest.webmanifest" />
+    <script async src="js/pwacompat.min.js"></script>
+    <script src="js/crc8.js" type="text/javascript"></script>
+    <script src="js/remote.js" type="text/javascript"></script>
+    <script>
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.register('service-worker.js');
+      }
+    </script>
+  </head>
+  <body onload="init();">
+    <div class="MovingLightShow">
+      <section class="hero is-success is-fullheight has-background-white">
+        <div class="hero-head has-text-black">
+          <div class="container">
+            <div id="connect-status" class="topheader">
+              <div class="columns is-mobile is-gapless is-vcentered m-1">
+                <div id="info-pan" class="column has-text-centered">
+                  <span id="info-left" class="container">
+                  0
+                  </span>
+                  <i class="fas fa-users"></i>
+                </div>
+                <div class="column mx-1">
+                  <img class="logo" src="images/logo.png" />
+                </div>
+                <div class="column has-text-centered">
+                  <span id="info-right" class="container">
+                  -
+                  </span>
+                </div>
+              </div>
+            </div>
+            <div class="columns is-mobile is-gapless is-vcentered m-1">
+              <div class="column mx-1">
+                <button id="ble" onclick="BLEclick();" class="button is-rounded is-small is-fullwidth is-light"><i class="fab fa-bluetooth has-text-grey"></i>&nbsp;Connect</button>
+              </div>
+              <div class="column mx-1">
+                <button onclick="command('003');" class="button is-rounded is-small is-fullwidth is-success"><i class="fas fa-check-circle"></i>&nbsp;Check</button>
+              </div>
+              <div class="column mx-1">
+                <button onclick="command('254');" class="button is-rounded is-small is-fullwidth is-black"><i class="fas fa-recycle"></i>&nbsp;Reboot&nbsp:<i class="fas fa-skull-crossbones"></i></button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="has-background-white">
+          <div class="container is-fullheight">
+            <div class="columns is-mobile is-gapless is-vcentered m-1">
+              <div class="column mx-1">
+                <button onclick="command('002');" class="command button is-small is-fullwidth is-black"><i class="fas fa-times-circle"></i>&nbsp;Blank<br /></button>
+              </div>
+              <div class="column mx-1">
+                <button onclick="command('101');" class="command button is-small is-fullwidth is-light"><i class="fas fa-child has-text-danger"></i><i class="fas fa-child has-text-success"></i>&nbsp;Alternate&nbsp;<i class="fas fa-gavel"></i></button>
+              </div>
+              <div class="column mx-1">
+                <button onclick="command('102');" class="command button is-small is-fullwidth is-warning"><i class="fas fa-users"></i>&nbsp;Yellow&nbsp;<i class="fas fa-gavel"></i></button>
+              </div>
+            </div>
+            <div class="columns is-mobile is-gapless is-vcentered m-1">
+              <div class="column mx-1">
+                <button onclick="command('103');" class="command button is-small is-fullwidth is-info"><i class="fas fa-arrow-left"></i>&nbsp;<i class="fas fa-water"></i> &nbsp;Wave&nbsp;<i class="fas fa-gavel"></i></button>
+              </div>
+              <div class="column mx-1">
+                <button onclick="command('104');" class="command button is-small is-fullwidth is-primary"><i class="fas fa-arrow-left"></i>&nbsp;<i class="fas fa-water"></i>&nbsp;<i class="fas fa-arrow-right"></i>&nbsp;<i class="fas fa-gavel"></i></button>
+              </div>
+              <div class="column mx-1">
+                <button onclick="command('106');" class="command button is-small is-fullwidth is-link"><i class="fas fa-tachometer-alt"></i>&nbsp;VUmeter&nbsp;<i class="fas fa-gavel"></i></button>
+              </div>
+            </div>
+            <div class="columns is-mobile is-gapless is-vcentered m-1">
+              <div class="column mx-1">
+                <button onclick="command('107');" class="command button is-small is-fullwidth is-success"><i class="fas fa-step-backward"></i>&nbsp;3 steps&nbsp;<i class="fas fa-gavel"></i></button>
+              </div>
+              <div class="column mx-1">
+                <button onclick="command('108');" class="command button is-small is-fullwidth is-light"><i class="fas fa-step-backward has-text-danger"></i><i class="fas fa-step-backward has-text-success"></i>&nbsp;3 Steps&nbsp;<i class="fas fa-gavel"></i></button>
+              </div>
+              <div class="column mx-1">
+                <button onclick="command('110');" class="command button is-small is-fullwidth is-warning"><i class="fas fa-rainbow"></i></i>&nbsp;Rainbow&nbsp;<i class="fas fa-gavel"></i></button>
+              </div>
+            </div>
+            <div class="columns is-mobile is-gapless is-vcentered m-1">
+              <div class="column mx-1">
+                <button onclick="command('017');" class="command button is-small is-fullwidth is-danger"><i class="fas fa-angle-double-left"></i><i class="fas fa-angle-double-right"></i>&nbsp;Scan</button>
+              </div>
+              <div class="column mx-1">
+                <button onclick="command('020');" class="command button is-small is-fullwidth is-link"><i class="fas fa-rainbow"></i></i>&nbsp;Rainbow</button>
+              </div>
+              <div class="column mx-1">
+                <button onclick="command('014');" class="command button is-small is-fullwidth"><i class="fas fa-bolt"></i>&nbsp;<i class="fas fa-bolt"></i>&nbsp;Strobe</button>
+              </div>
+            </div>
+            <div class="columns is-mobile is-gapless is-vcentered m-1">
+              <div class="column mx-1">
+                <button onclick="command('018');" class="command button is-small is-fullwidth is-info"><i class="fas fa-bug"></i>&nbsp;Firefly</button>
+              </div>
+              <div class="column mx-1">
+                <button onclick="command('015');" class="command button is-small is-fullwidth is-primary"><i class="fas fa-lungs"></i>&nbsp;Breath</button>
+              </div>
+              <div class="column mx-1">
+                <button onclick="command('016');" class="command button is-small is-fullwidth is-danger"><i class="fas fa-heartbeat"></i>&nbsp;Heartbeat</button>
+              </div>
+            </div>
+            <div class="columns is-mobile is-gapless is-vcentered m-1">
+              <div class="column mx-1">
+                <button onclick="command('021');" class="command button is-small is-fullwidth"><i class="fas fa-bahai"></i>&nbsp;Stars</button>
+              </div>
+              <div class="column mx-1">
+                <button onclick="command('204');" class="command button is-small is-fullwidth is-warning"><i class="far fa-lightbulb"></i>&nbsp;Light On&nbsp;</button>
+              </div>
+              <div class="column mx-1">
+                <button onclick="command('111');" class="command button is-small is-fullwidth is-info"><i class="fas fa-spinner"></i>&nbsp;Spin&nbsp;<i class="fas fa-gavel"></i></button>
+              </div>
+            </div>
+            <div class="columns is-mobile is-gapless is-vcentered m-1">
+              <div class="column mx-1">
+                <button onclick="command('202');" class="command button is-small is-fullwidth is-black"><i class="fas fa-drum"></i>&nbsp;Drum Off</button>
+              </div>
+              <div class="column mx-1">
+                <button onclick="command('201');" class="command button is-small is-fullwidth is-light"><i class="fas fa-drum"></i>&nbsp;Drum In&nbsp;<i class="fas fa-users"></i></button>
+              </div>
+              <div class="column mx-1">
+                <button onclick="command('200');" class="command button is-small is-fullwidth is-warning"><i class="fas fa-drum"></i>&nbsp;Drum On&nbsp;<i class="far fa-lightbulb"></i></button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="hero-foot has-text-centered has-background-white has-text-black is-size-7">
+        <!--
+          <div>
+            <span id="status" class="container">
+            </span>
+            -
+            <span id="last" class="container">
+            </span>
+          </div>
+          -->
+          <div id="copyright" class="copyright container">
+            &copy; 2020-2021 Showband Les Armourins
+          </div>
+        </div>
+      </section>
+    </div>
+  </body>
+</html>

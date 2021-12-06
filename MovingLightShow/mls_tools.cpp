@@ -130,7 +130,7 @@ void MlsTools::importConfiguration(String jsonImport) {
 }
 
 
-bool MlsTools::saveConfiguration() {
+boolean MlsTools::saveConfiguration() {
   // Use arduinojson.org/assistant to compute the capacity.
   StaticJsonDocument<JSON_SIZE> doc;
 
@@ -182,7 +182,7 @@ bool MlsTools::saveConfiguration() {
 }
 
 
-bool MlsTools::useDefaultSsid() {
+boolean MlsTools::useDefaultSsid() {
   return (!this->disableDefauldSsid);
 }
 
@@ -195,7 +195,7 @@ void MlsTools::spiffs_init() {
     this->spiffs_available = true;
   } else {
     DEBUG_PRINTLN("Error during SPIFFS mounting");
-    bool formatted = SPIFFS.format();
+    boolean formatted = SPIFFS.format();
     if (formatted) {
       DEBUG_PRINTLN("SPIFFS formatted successfully");
       if (SPIFFS.begin()) {

@@ -7,4 +7,6 @@
  * @brief LoRa helpers
  * 
  **********************************************************************/
-#include "mls_lora.h"
+#ifdef ARDUINO_TTGO_LoRa32_v21new
+  #include "mls_lora.h"
+#endif

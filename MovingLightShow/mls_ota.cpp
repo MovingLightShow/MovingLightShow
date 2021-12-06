@@ -23,9 +23,9 @@ MlsOta::MlsOta(String ota_url, String actual_firmware) {
 }
 
 
-bool MlsOta::checkOtaUpdates(String ota_iid) {
+boolean MlsOta::checkOtaUpdates(String ota_iid) {
   WiFiClient client;
-  bool ota_check_result = false;
+  boolean ota_check_result = false;
 
   this->ota_iid = ota_iid;
   String fwURL = this->ota_url;
@@ -73,7 +73,15 @@ bool MlsOta::checkOtaUpdates(String ota_iid) {
 
 
 void MlsOta::otaUpdates() {
+  this->otaUpdates(false);
+}
+
+
+void MlsOta::otaUpdates(boolean forced) {
   WiFiClient client;
+  if (forced) {
+    strcat(this->new_firmware_url,"&forced=1");
+  }
   t_httpUpdate_return ret = httpUpdate.update(client, this->new_firmware_url);
   switch(ret) {
     case HTTP_UPDATE_FAILED:

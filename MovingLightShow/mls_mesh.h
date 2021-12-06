@@ -19,8 +19,13 @@
   #include <Wire.h>
   #include "esp_wifi.h"
 
+  #define MLS_ACTION_KEEP_ALIVE     0   // Packet is ignored, keep alive only
   #define MLS_ACTION_REBOOT         99  // Reset the device
   #define MLS_ACTION_FORCE_UPDATE   199 // Force the firmware update
+
+  #define MLS_TOPOLOGY_KEEP_ALIVE   0
+  #define MLS_TOPOLOGY_REQUEST      1
+  #define MLS_TOPOLOGY_REPLY        2
 
   #define MLS_TYPE_TOPOLOGY_DATA    1
   #define MLS_TYPE_ACTION_DATA      2
@@ -30,6 +35,17 @@
   #define MLS_TYPE_MODIFIER_GROUP   0x40
 
   #define MLS_DATA_SIZE             20
+
+
+  struct DEVICE_INFO {
+    uint8_t mac[6];
+    uint8_t id;
+    uint8_t rank;
+    uint8_t column;
+    int8_t rssi;
+    uint32_t rssi_time; // last time rssi was measured (in ms)
+  };
+
 
   struct MLS_PACKET {
     union {
@@ -56,11 +72,10 @@
             uint8_t RSSI_SHIFTER;        // LSB: shifter (0-8)
                                          // MSB: RSSI organisation :
                                          //  1: regular (value up to -126, -127: no signal)
-                                         //  2: 2x compressed RSSI in one byte RSSI0 0xxxxxxx 
-                                         //      RSSI1 1xxxxxxx, negative value always assumed, negative bit ignored
-                                         //  4: 4x rescaled RSSI in one byte, RSSI0 00xxxxxx, RSSI1 01xxxxxx,
-                                         //      RSSI2 10xxxxxx, RSI3 11xxxxxx, negative value always assumed, negative bit ignored
-                                         //      Rescale : 0 to -30 -> 0, -31 to -91 -> 1 to 61, -93 and smaller -> 62, -127 -> 63
+                                         //  2: Rescaled RSSI in 2 x 4 bits
+                                         //     0: 0 to -40 dBm , and -3dBm per step (1: down to -34dBm, 2: down to -38dBm, ... 14: down to -82dBm, 15 : -83dBm and lower
+                                         //  4: Rescaled RSSI in 4 x 2 bits
+                                         //     0: 0 to -40 dBm, 1: -41 to -70dBm, 2: -71 TO -80dBm, 3: -81dBm and lower
             int8_t RSSI[24];             // 0 to -120 dBm (-70dBm Minimum signal strength for reliable packet delivery,
                                          //   -80dBm Minimum signal strength for basic connectivity. Packet delivery may be unreliable.)
             uint8_t FIRST_SENDER_ID;     // First sender ID which have sent the last packet
@@ -71,27 +86,46 @@
             uint8_t COMMAND_SENDER_ID;   // Sender ID which has sent the command (0: no sender, master cannot send himself command packet)
             uint16_t COMMAND_PACKET_ID;  // Packet ID of the command
             uint8_t DATA[MLS_DATA_SIZE]; // Effective payload of the packet
-          };
+          } __attribute__((__packed__));
           uint8_t CRC_DATA[79];          // Data on which to calculate the CRC
         };
         uint8_t CRC;                     // CRC control
-      };
+      } __attribute__((__packed__));
       uint8_t raw[80];                   // Full raw data of the packet
     };
-  };
-  const uint8_t MLS_PACKET_SIZE = 80;
+  } __attribute__((__packed__));
+  const uint8_t MLS_PACKET_SIZE = sizeof(MLS_PACKET);
+
+
+  struct TOPOLOGY_PACKET {
+    union {
+      struct {
+        uint8_t type;
+        uint8_t device_id;
+        uint8_t mac[6];
+        uint8_t rank;
+        uint8_t column;
+        uint8_t topology_data[10];
+      } __attribute__((__packed__));
+      uint8_t raw[MLS_DATA_SIZE];     // Full raw data of the packet
+    };
+  } __attribute__((__packed__));
+  const uint8_t TOPOLOGY_PACKET_SIZE = sizeof(TOPOLOGY_PACKET);
+
 
   struct ACTION_PACKET {               // Action packet (ACTION DATA payload)
     union {
       struct {
         uint8_t action;               // Action (see constants for possible values)
         uint8_t action_data[19];      // Action payload
-      };
+      } __attribute__((__packed__));
       uint8_t raw[MLS_DATA_SIZE];     // Full raw data of the packet
     };
-  };
-  const uint8_t ACTION_PACKET_SIZE = MLS_DATA_SIZE;
+  } __attribute__((__packed__));
+  const uint8_t ACTION_PACKET_SIZE = sizeof(ACTION_PACKET);
 
   const uint8_t espnowBroadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+
+  uint8_t searchDevice(struct DEVICE_INFO *all_devices, uint8_t number_of_devices, uint8_t *mac);
 
 #endif

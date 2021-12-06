@@ -1,4 +1,4 @@
-/**********************************************************************
+ /**********************************************************************
  *
  * MovingLightShow package - Synchronized LED strips for musicians
  * https://MovingLightShow.art
@@ -40,20 +40,20 @@
         int rank;
         int column;
         int remote;
-      };
+      } __attribute__((__packed__));
       Config config;
       Config configRead;
       void spiffs_init();
       void loadConfiguration(String default_iid);
-      bool saveConfiguration();
+      boolean saveConfiguration();
       void importConfiguration(String jsonImport);
-      bool useDefaultSsid();
+      boolean useDefaultSsid();
   
     private:
       char jsonRead[JSON_SIZE];
       char jsonActual[JSON_SIZE];
-      bool spiffs_available;
-      bool disableDefauldSsid;
+      boolean spiffs_available;
+      boolean disableDefauldSsid;
   };
 
 #endif

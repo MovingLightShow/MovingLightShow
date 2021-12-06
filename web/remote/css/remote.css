@@ -1,0 +1,32 @@
+/* Moving Light Show remote control                          *
+ * https://MovingLightShow.art - contact@movinglightshow.art *
+ * Version 1.0.8.4                                           *
+ * (c) 2020-2021 Showband Les Armourins                      */
+
+@media screen and (orientation:portrait) {
+  .topheader {
+    padding-top: env(safe-area-inset-top, 20px);
+  }
+  .command {
+    height: 80px;
+  }
+}
+
+@media screen and (orientation:landscape) {
+  .topheader {
+    display: none;
+  }
+  .command {
+    height: 45px;
+  }
+}
+
+.disconnected-warning {
+  background-color: #ffa0a0;
+}
+
+/*
+.logo {
+  height: 50px;
+}
+*/

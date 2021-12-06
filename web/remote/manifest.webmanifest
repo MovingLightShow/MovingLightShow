@@ -1,0 +1,21 @@
+{
+  "short_name": "Moving Light Show",
+  "name": "Moving Light Show remote control",
+  "icons": [
+    {
+      "src": "images/icons-192.png",
+      "type": "image/png",
+      "sizes": "192x192"
+    },
+    {
+      "src": "images/icons-512.png",
+      "type": "image/png",
+      "sizes": "512x512"
+    }
+  ],
+  "start_url": "./?source=pwa",
+  "background_color": "#FFFFFF",
+  "display": "standalone",
+  "theme_color": "#FFFFFF",
+  "description": "Moving Light Show remote control"
+}

@@ -44,8 +44,8 @@
  * !!!!!!!!!!!!!!!!!!!! WARNING !!!!!!!!!!!!!!!!!!!!!!!
  * 
  * @author    Andre Liechti, MovingLightShow.art / Showband Les Armourins <contact@movinglightshow.art>
- * @version   1.0.4.0
- * @date      2021-11-10
+ * @version   1.1.1.1
+ * @date      2021-11-26
  * @since     2021-01-01
  * @copyright (c) 2020-2021 Showband Les Armourins, Neuchatel, Switzerland
  * @copyright GNU Lesser General Public License
@@ -62,6 +62,13 @@
  * Please check MovingLightShow.h for option definitions
  * 
  * Changes log:
+ *   2021-11-26 1.1.1.1 [ENH] Back to basic MLS-MESH implementation for the show tonight
+ *                      [ENH] LoRa Remote control additional commands
+ *                      [ENH] LoRa packets are sent asynchronously
+ *                      [ENH] Better update and startup handling
+ *                      [ENH] Check, heartbeat and breath effects implemented
+ *   2021-11-14 1.0.5.1 [FIX] Better Wifi handling
+ *   2021-11-13 1.0.5.0 [FIX] MLS-MESH RSSI "compression" algorithm
  *   2021-11-09 1.0.4.0 [ENH] Disable sleep mode before lights activity (less latency)
  *                      [ENH] ESPNOW remote actions (force update and reboot)
  *   2021-11-08 1.0.3.6 [ENH] LoRa remote control integration
@@ -80,7 +87,7 @@
  *   2021-01-01 0.0.0.1 first try and first ideas
  * 
  **********************************************************************/
-const String ACTUAL_FIRMWARE = "1.0.4.0";
+const String ACTUAL_FIRMWARE = "1.1.1.1";
 
 // https://github.com/FastLED/FastLED
 
@@ -128,8 +135,8 @@ const String ACTUAL_FIRMWARE = "1.0.4.0";
   BLEServer *pServer = NULL;
   BLECharacteristic * pTxCharacteristic;
 
-  bool deviceConnected = false;
-  bool oldDeviceConnected = false;
+  boolean deviceConnected = false;
+  boolean oldDeviceConnected = false;
   uint8_t txValue = 0;
   
   class bleServerCallbacks: public BLEServerCallbacks {
@@ -145,26 +152,41 @@ const String ACTUAL_FIRMWARE = "1.0.4.0";
   class bleCallbacks: public BLECharacteristicCallbacks {
       void onWrite(BLECharacteristic *pCharacteristic) {
         std::string rxValue = pCharacteristic->getValue();
-  
-        if (rxValue.length() > 0) {
+        if (rxValue.length() > 3) {
           DEBUG_PRINTLN("*********");
-          DEBUG_PRINT("BLE: received Value: ");
+          DEBUG_PRINT("BLE: received Value (length: ");
+          DEBUG_PRINT(rxValue.length());
+          DEBUG_PRINT("): ");
           for (int i = 0; i < rxValue.length(); i++) {
             bleParams[i] = rxValue[i];
             DEBUG_PRINT(rxValue[i]);
           }
           bleParams[rxValue.length()] = (char) 0;
           DEBUG_PRINTLN();
-          DEBUG_PRINTLN("*********");
 
-          #ifdef ARDUINO_TTGO_LoRa32_v21new
-            #ifdef LORA_BAND
-              // send packet
-              LoRa.beginPacket();
-              LoRa.print(bleParams);
-              LoRa.endPacket();
+          if (memcmp(gIID, bleParams, 3) != 0) {
+            DEBUG_PRINTLN("BLE: packet received is not a valid packet (bad header)");
+          } else {
+            DEBUG_PRINTLN("*********");
+  
+            #ifdef ARDUINO_TTGO_LoRa32_v21new
+              #ifdef LORA_BAND
+                // Send LoRa packet
+                DEBUG_PRINTLN("BLE: BEGIN SENDING LORA PACKET");
+                LoRa.beginPacket(LORA_IMPLICIT_HEADER);
+                // LoRa.print(bleParams);
+                // LoRa.write(bleParams, rxValue.length());
+                for (int i = 0; i < rxValue.length(); i++) {
+                  LoRa.write(rxValue[i]);
+                }
+                LoRa.endPacket(false); // Do NOT send asynchronously
+                LoRa.receive();
+                DEBUG_PRINTLN("BLE: END SENDING LORA PACKET");
+              #endif
             #endif
-          #endif
+          }
+        } else {
+          DEBUG_PRINT("BLE: packet received is not a valid packet (too small)");
         }
       }
   };
@@ -182,24 +204,77 @@ AiEsp32RotaryEncoder rotaryEncoder = AiEsp32RotaryEncoder(ROTARY_ENCODER_A_PIN, 
 
   #ifdef LORA_BAND
     // callback when LoRa data is received
-    void loraCbk(int packetSize) {
+    void lora_receive_cb(int packetSize) {
+      char one_char;
+      String loraInfo = "";
+      uint8_t crc_received;
       lora_packet = "";
+      loraCommand = "";
       lora_packSize = String(packetSize, DEC);
-      for (int i = 0; i < packetSize; i++) {lora_packet += (char) LoRa.read(); }
-      lora_rssi = String(LoRa.packetRssi(), DEC);
-      // display.clear();
-      // display.setTextAlignment(TEXT_ALIGN_LEFT);
-      // display.setFont(ArialMT_Plain_10);
-      // display.drawStringMaxWidth(0 , 26 , 128, lora_packet);
-      // display.drawString(0, 0, lora_rssi); 
-      // display.display();
-      loraCommand = 1;
-      DEBUG_PRINT("LoRa: loraCbk packSize: ");
-      DEBUG_PRINTLN(lora_packSize);
-      DEBUG_PRINT("LoRa: loraCbk packet: ");
-      DEBUG_PRINTLN(lora_packet);
-      DEBUG_PRINT("LoRa: loraCbk RSSI: ");
-      DEBUG_PRINTLN(lora_rssi);
+
+      // Packet size must be at least 7 bytes (IID + command + extension + CRC),but not more than 80
+      if ((packetSize <= 80) && (packetSize >= 7)) {
+        for (int i = 0; i < (packetSize-1); i++) {
+          one_char = (char) LoRa.read();
+          lora_packet += one_char;
+          if ((i > 2) & (i < 6)) {
+            loraCommand += one_char;
+          } else if (i >= 6) {
+            if (loraCommand.toInt() == EFFECT_FEEDBACK_INFO) {
+              loraInfo += one_char;
+            } else {
+              loraExtended[i-6] = one_char;
+            }
+          }
+        }
+
+        if (memcmp(gIID, lora_packet.c_str(), 3) != 0) {
+          DEBUG_PRINT("LoRa: invalid packet received");
+        } else {
+          DEBUG_PRINT("LoRa: loraCommand (length: "); DEBUG_PRINT(packetSize); DEBUG_PRINT("): "); DEBUG_PRINTLN(loraCommand);
+  
+          // CRC is the last char
+          crc_received = (char) LoRa.read();
+          
+          lora_rssi = String(LoRa.packetRssi(), DEC);
+    
+          if (MLS_remoteControl) {
+            strcpy(bleLastCmdInfo, loraInfo.c_str());
+            DEBUG_PRINT("LoRa info for BLE: "); DEBUG_PRINTLN(bleLastCmdInfo);
+          } else { // MLS_relay in the band
+            // display.clear();
+            // display.setTextAlignment(TEXT_ALIGN_LEFT);
+            // display.setFont(ArialMT_Plain_10);
+            // display.drawStringMaxWidth(0 , 26 , 128, lora_packet);
+            // display.drawString(0, 0, lora_rssi); 
+            // display.display();
+    
+            cmd_to_send_ts =  micros();
+            cmd_to_send = loraCommand.toInt();
+    
+            switch(cmd_to_send) {
+              case EFFECT_REBOOT:
+                action_packet.action = MLS_ACTION_REBOOT;
+                mlsmesh_send_packet(MLS_TYPE_ACTION_DATA, (uint8_t *) &action_packet);
+                break;
+              case 999:
+                break;
+              default:
+                break;
+            }
+            /*
+            if ((mls_received_packet.COMMAND != 0) && (mls_received_packet.COMMAND_PACKET_ID != LastLoraCommandPacketId)) {
+              if (
+            }
+            */
+      
+            loraReceived = 1;
+            DEBUG_PRINT("LoRa: lora_receive_cb packSize: "); DEBUG_PRINT(lora_packSize); DEBUG_PRINT("packet: "); DEBUG_PRINTLN(lora_packet);
+            DEBUG_PRINT("LoRa: lora_receive_cb RSSI: "); DEBUG_PRINTLN(lora_rssi);
+            DEBUG_PRINT("LoRa: loraCommand: "); DEBUG_PRINTLN(loraCommand);
+          }
+        }
+      } // if (packetSize >= 7)
     }
   #endif
 #endif
@@ -210,7 +285,7 @@ void IRAM_ATTR readEncoderISR() {
 }
 
 
-void promiscuous_rx_cb(void *buf, wifi_promiscuous_pkt_type_t type) {
+void mlsmesh_promiscuous_rx_cb(void *buf, wifi_promiscuous_pkt_type_t type) {
   // All espnow traffic uses action frames which are a subtype of the mgmnt frames so filter out everything else.
   if (type != WIFI_PKT_MGMT)
       return;
@@ -258,7 +333,7 @@ void promiscuous_rx_cb(void *buf, wifi_promiscuous_pkt_type_t type) {
 
 /*
     for (uint8_t i = 0; i < 100; i++) {
-      bool equal = true;
+      boolean equal = true;
       for (int j=0; j<6; j++) {
         if (idMac[i][j] != hdr->addr2[j]) {
           equal = false;
@@ -273,7 +348,7 @@ void promiscuous_rx_cb(void *buf, wifi_promiscuous_pkt_type_t type) {
       }
     }
 */
-    DEBUG_PRINT("promiscuous_rx_cb running on core ");
+    DEBUG_PRINT("mlsmesh_promiscuous_rx_cb running on core ");
     DEBUG_PRINTLN(xPortGetCoreID());
   
     DEBUG_PRINT("Sender RSSI: ");
@@ -289,32 +364,49 @@ void promiscuous_rx_cb(void *buf, wifi_promiscuous_pkt_type_t type) {
 }
 
 
-boolean sendMeshPacket(const uint8_t packetType, const uint16_t packetId, const uint8_t *data) {
-  bool sendResult = false;
+boolean mlsmesh_send_packet(const uint8_t packetType, const uint8_t *data) {
+  if (MLS_masterMode) {
+    mlsmeshLastPackedId++;
+  }
+  mlsmeshLastPacketSentMs = millis();
+
+  boolean sendResult = false;
   struct MLS_PACKET mls_packet;
   memcpy(mls_packet.IID, mlstools.config.iid, 3);
   mls_packet.TYPE = packetType;
-  mls_packet.PACKET_ID = packetId;
+  mls_packet.PACKET_ID = mlsmeshLastPackedId;
+  mls_packet.SENDER_ID = my_device.id;
+  mls_packet.NUMBER_OF_COLUMNS = mlslighteffects.getColumns();
+  mls_packet.NUMBER_OF_RANKS = mlslighteffects.getRanks();
+  mls_packet.COMMAND = lastCommand;
+  mls_packet.COMMAND_SENDER_ID = lastCommandSenderId;
+  mls_packet.COMMAND_PACKET_ID = lastCommandPacketId;
+
   memcpy(mls_packet.DATA, data, MLS_DATA_SIZE);
   esp_err_t result = esp_now_send(espnowBroadcastAddress, (uint8_t *) &mls_packet.raw, MLS_PACKET_SIZE);
   sendResult = (result == ESP_OK);
-  #ifdef DEBUG_MLS
-    if (result != ESP_OK) {
+  if (sendResult) {
+  } else {
+    #ifdef DEBUG_MLS
       DEBUG_PRINT("ESPNOW: Error sending data of type ");
       DEBUG_PRINTLN(packetType);
-    }
-  #endif
+    #endif
+  }
   return sendResult;
 }
 
 
 // callback when ESPNOW data is received
-void OnEspNowDataRecv(const uint8_t * mac_addr, const uint8_t *incomingData, int len) {
+void mlsmesh_receive_packet_cb(const uint8_t * mac_addr, const uint8_t *incomingData, int len) {
+    uint8_t received_mac[6];
+    boolean isNewCommand = false;
+
+    memcpy(received_mac, mac_addr, 6);
 
     char macStr[18];
     snprintf(macStr, sizeof(macStr), "%02x:%02x:%02x:%02x:%02x:%02x",
              mac_addr[0], mac_addr[1], mac_addr[2], mac_addr[3], mac_addr[4], mac_addr[5]);
-    DEBUG_PRINT("ESPNOW: OnEspNowDataRecv packet of ");
+    DEBUG_PRINT("ESPNOW: mlsmesh_receive_packet_cb packet of ");
     DEBUG_PRINT(len);
     DEBUG_PRINT(" bytes received from: ");
     DEBUG_PRINT(macStr);
@@ -327,18 +419,80 @@ void OnEspNowDataRecv(const uint8_t * mac_addr, const uint8_t *incomingData, int
     DEBUG_PRINTLN("ESPNOW: wrong packet size");
   } else if (memcmp(mlstools.config.iid, incomingData, 3) != 0) {
     DEBUG_PRINTLN("ESPNOW: packet received is not a valid MLS packet (bad header)");
-} else {
+  } else {
+    OneEspNowPacketReceived = true;
     struct MLS_PACKET mls_received_packet;
     memcpy(mls_received_packet.raw, incomingData, MLS_PACKET_SIZE);
     DEBUG_PRINT("ESPNOW: packet received is a valid MLS packet of type ");
     DEBUG_PRINTLN(mls_received_packet.TYPE);
 
-    // LIGHT DATA and ACK LIGHT DATA
-    if ((MLS_TYPE_LIGHT_DATA == mls_received_packet.TYPE) || (MLS_TYPE_ACK_LIGHT_DATA == mls_received_packet.TYPE)) {
-      struct LIGHT_PACKET receivedLightPacket;
-      if (!MLS_masterMode) {
-        memcpy(receivedLightPacket.raw, mls_received_packet.DATA, LIGHT_PACKET_SIZE);
-        mlslighteffects.setLightData(millis(), receivedLightPacket); // Max latency: 39000, not used yet.
+    // Update the last command if it is a new one
+    if ((mls_received_packet.COMMAND_PACKET_ID - lastCommandPacketId) > 0) {
+      isNewCommand = true;
+      lastCommand = mls_received_packet.COMMAND;
+      lastCommandSenderId = mls_received_packet.COMMAND_SENDER_ID;
+      lastCommandPacketId = mls_received_packet.COMMAND_PACKET_ID;
+    }
+    DEBUG_PRINT("Received ESPNOW PACKET_ID: ");
+    DEBUG_PRINTLN(mls_received_packet.PACKET_ID);
+    if ((mls_received_packet.PACKET_ID > mlsmeshLastPackedId) || (abs(mls_received_packet.PACKET_ID - mlsmeshLastPackedId) > 10000)) {
+      mlsmeshLastPackedId = mls_received_packet.PACKET_ID;
+    }
+
+    struct LIGHT_PACKET receivedLightPacket;
+
+    // LIGHT DATA
+    if (MLS_TYPE_LIGHT_DATA == mls_received_packet.TYPE) {
+
+      if (last_packet_played != mls_received_packet.PACKET_ID) {
+        last_packet_played = mls_received_packet.PACKET_ID;
+
+        // Extract number of columns and ranks
+        if (!MLS_masterMode) {
+          mlslighteffects.setColumns(mls_received_packet.NUMBER_OF_COLUMNS);
+          mlslighteffects.setRanks(mls_received_packet.NUMBER_OF_RANKS);
+        }
+          
+        if (!MLS_masterMode) {
+          memcpy(receivedLightPacket.raw, mls_received_packet.DATA, LIGHT_PACKET_SIZE);
+          #ifdef DEBUG_MLS
+            DEBUG_PRINT("ESPNOW: MLS_TYPE_LIGHT_DATA MLS effect: ");
+            DEBUG_PRINTLN(receivedLightPacket.effect);
+            DEBUG_PRINT("LIGHT INFO: Left color (RGB): ");
+            DEBUG_PRINT(receivedLightPacket.left_color_r);
+            DEBUG_PRINT(" ");
+            DEBUG_PRINT(receivedLightPacket.left_color_g);
+            DEBUG_PRINT(" ");
+            DEBUG_PRINTLN(receivedLightPacket.left_color_b);
+            DEBUG_PRINT("LIGHT INFO: Left on time: ");
+            DEBUG_PRINTLN(receivedLightPacket.left_on_time);
+          #endif
+          if (last_effect_played != current_beat_effect) {
+            detectedBeatCounter = 0;
+          }
+          mlslighteffects.setLightData(millis(), &receivedLightPacket); // Max latency: 39000, not used yet.
+          detectedBeatCounter++;
+        }
+      } // if (last_packet_played != mls_received_packet.PACKET_ID)
+
+    // ACK LIGHT DATA
+    } else if (MLS_TYPE_ACK_LIGHT_DATA == mls_received_packet.TYPE) {
+      if (MLS_masterMode) {
+        if (isNewCommand) {
+          // Is the effect of the command synced with bass drum ?
+          if ((lastCommand >= 100) && (lastCommand <= 199)) {
+            current_beat_effect = lastCommand;
+          } else {
+            if (EFFECT_CHECK == lastCommand) {
+              receivedLightPacket = (LIGHT_PACKET){lastCommand, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+            } else {
+              receivedLightPacket = (LIGHT_PACKET){lastCommand, 0, millis(), 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+            }
+            boolean sendResult = mlsmesh_send_packet(MLS_TYPE_LIGHT_DATA, (uint8_t *) &receivedLightPacket);
+            mlslighteffects.setLightData(millis(), &receivedLightPacket); // Max latency: 39000, not used yet.
+            current_beat_effect = EFFECT_KEEP_ALIVE;
+          }
+        }
       }
     } else if (MLS_TYPE_ACTION_DATA == mls_received_packet.TYPE) {
       struct ACTION_PACKET receivedActionPacket;
@@ -346,8 +500,52 @@ void OnEspNowDataRecv(const uint8_t * mac_addr, const uint8_t *incomingData, int
       if (receivedActionPacket.action == MLS_ACTION_FORCE_UPDATE) {
         DEBUG_PRINTLN("ESPNOW: Force firmware updated received");
         forceFirmwareUpdate = true;
+        forceFirmwareUpdateTrial = 0;
       } else if (receivedActionPacket.action == MLS_ACTION_REBOOT) {
+        action_packet.action = MLS_ACTION_REBOOT;
+        boolean sendResult = mlsmesh_send_packet(MLS_TYPE_ACTION_DATA, (uint8_t *) &action_packet);
+        delay(500);
         ESP.restart();
+      }
+    } else if (MLS_TYPE_TOPOLOGY_DATA == mls_received_packet.TYPE) {
+      struct TOPOLOGY_PACKET receivedTopologyPacket;
+      uint8_t device_id;
+      memcpy(receivedTopologyPacket.raw, mls_received_packet.DATA, ACTION_PACKET_SIZE);
+      DEBUG_PRINT("receivedTopologyPacket.type: ");DEBUG_PRINTLN(receivedTopologyPacket.type);
+      DEBUG_PRINT("receivedTopologyPacket.device_id: ");DEBUG_PRINTLN(receivedTopologyPacket.device_id);
+      DEBUG_PRINT("receivedTopologyPacket.rank: ");DEBUG_PRINTLN(receivedTopologyPacket.rank);
+      DEBUG_PRINT("receivedTopologyPacket.column: ");DEBUG_PRINTLN(receivedTopologyPacket.column);
+      if ((MLS_masterMode) && (MLS_TOPOLOGY_REQUEST == receivedTopologyPacket.type)) {
+        device_id = searchDevice(devices, announced_devices, received_mac);
+        if (0xFF == device_id) {
+          memcpy(devices[announced_devices].mac, receivedTopologyPacket.mac, 6);
+          devices[announced_devices].rank   = receivedTopologyPacket.rank;
+          devices[announced_devices].column = receivedTopologyPacket.column;
+          announced_devices++;
+          device_id = announced_devices; // We do that after ++ because the master as the id 0 !
+          if (receivedTopologyPacket.column > mlslighteffects.getColumns()) {
+            mlslighteffects.setColumns(receivedTopologyPacket.column);
+          }
+          if (receivedTopologyPacket.rank > mlslighteffects.getRanks()) {
+            mlslighteffects.setRanks(receivedTopologyPacket.rank);
+          }
+        }
+        // Send back the id info with the mac address;
+        topology_packet.device_id = device_id;
+        memcpy(topology_packet.mac, devices[device_id].mac, 6);
+        topology_packet.type   = MLS_TOPOLOGY_REPLY;
+        topology_packet.rank   = devices[device_id].rank;
+        topology_packet.column = devices[device_id].column;
+        boolean sendResult = mlsmesh_send_packet(MLS_TYPE_TOPOLOGY_DATA, (uint8_t *) &topology_packet);
+      } else if ((!MLS_masterMode) && (MLS_TOPOLOGY_REPLY == receivedTopologyPacket.type)) {
+        if (0xFF == my_device.id) {
+          memcpy(devices[receivedTopologyPacket.device_id].mac, receivedTopologyPacket.mac, 6);
+          devices[receivedTopologyPacket.device_id].rank   = receivedTopologyPacket.rank;
+          devices[receivedTopologyPacket.device_id].column = receivedTopologyPacket.column;
+          if (memcmp(my_device.mac, receivedTopologyPacket.mac, 6) == 0) { // It's for me :-)
+            my_device.id = receivedTopologyPacket.device_id;
+          }
+        }
       }
     }
   }
@@ -392,13 +590,12 @@ void setup() {
   DEBUG_PRINTLN();
   DEBUG_PRINTLN("============================================================");
   DEBUG_PRINTLN();
-  DEBUG_PRINT("Light packet size: ");
-  DEBUG_PRINTLN(LIGHT_PACKET_SIZE);
-  DEBUG_PRINT("MLS packet size: ");
-  DEBUG_PRINTLN(MLS_PACKET_SIZE);
 
-  #ifdef ARDUINO_ESP32_DEV
-    pinMode(0, INPUT); // on board boot button, used to force firmware update
+  #ifdef FORCE_FIRMWARE_UPDATE_PIN
+    #if FORCE_FIRMWARE_UPDATE_PIN > -1
+      pinMode(FORCE_FIRMWARE_UPDATE_PIN, INPUT); // on board boot button, used to force firmware update
+      pinMode(FORCE_FIRMWARE_UPDATE_PIN, INPUT_PULLDOWN);
+    #endif
   #endif
 
   #if MASTER_PIN > 0
@@ -440,38 +637,47 @@ void setup() {
     #ifdef LORA_BAND
       DEBUG_PRINTLN("SETUP: LoRa: begin initialization");
       SPI.begin(LORA_SCK_PIN,LORA_MISO_PIN,LORA_MOSI_PIN,LORA_SS_PIN);
-DEBUG_PRINTLN("SETUP: LoRa: DEBUG 1");
+DEBUG_PRINT("SETUP: LoRa: DEBUG 0");
       LoRa.setPins(LORA_SS_PIN,LORA_RST_PIN,LORA_DI0_PIN);  
-DEBUG_PRINTLN("SETUP: LoRa: DEBUG 2");
-      LoRa.beginPacket(true); // must be implicit header mode for SF6
-DEBUG_PRINTLN("SETUP: LoRa: DEBUG 3");
+DEBUG_PRINT(", 1");
+      LoRa.setSyncWord(LORA_SYNC_WORD);
+DEBUG_PRINT(", 2");
+      LoRa.beginPacket(LORA_IMPLICIT_HEADER); // must be implicit header mode for SF6
+DEBUG_PRINT(", 3");
       delay(1000);
       LoRa.setSpreadingFactor(LORA_SPREADING_FACTOR);
-DEBUG_PRINTLN("SETUP: LoRa: DEBUG 4");
+DEBUG_PRINT(", 4");
       LoRa.setTxPower(LORA_TX_POWER, PA_OUTPUT_PA_BOOST_PIN);
-DEBUG_PRINTLN("SETUP: LoRa: DEBUG 5");
+DEBUG_PRINT(", 5");
       LoRa.setSignalBandwidth(LORA_SIGNAL_BANDWIDTH);
-DEBUG_PRINTLN("SETUP: LoRa: DEBUG 6");
+DEBUG_PRINT(", 6");
       LoRa.setCodingRate4(LORA_CODING_RATE_4);
-DEBUG_PRINTLN("SETUP: LoRa: DEBUG 7");
+DEBUG_PRINT(", 7");
       LoRa.setPreambleLength(LORA_PREAMBLE_LENGTH);
-DEBUG_PRINTLN("SETUP: LoRa: DEBUG 8");
-      LoRa.disableCrc(); // disable is default
-DEBUG_PRINTLN("SETUP: LoRa: DEBUG 9");
+DEBUG_PRINT(", 8");
+      #ifdef LORA_ENABLE_CRC
+        LoRa.enableCrc();
+      #else
+        LoRa.disableCrc(); // disable is default
+      #endif
+DEBUG_PRINT(", 9");
       LoRa.endPacket(true); //Async mode enabled (default is false)      
-DEBUG_PRINTLN("SETUP: LoRa: DEBUG 10");
+DEBUG_PRINTLN(", 10");
       if (!LoRa.begin(LORA_BAND)) {
         LoraIsUp = false;
         DEBUG_PRINTLN("SETUP: LoRa: ERROR! Begin failed!");
       } else {
         LoraIsUp = true;
-        LoRa.onReceive(loraCbk);
+        LoRa.onReceive(lora_receive_cb);
         LoRa.receive(); // Receiver mode activated
         DEBUG_PRINTLN("SETUP: LoRa: successful initialization");
       }
     #endif
 
   #endif
+
+  // Default is 0xFF (unregistered)
+  my_device.id = 0xFF;
 
   TIMERG0.wdt_wprotect=TIMG_WDT_WKEY_VALUE;
   TIMERG0.wdt_feed=1;
@@ -489,20 +695,68 @@ DEBUG_PRINTLN("SETUP: LoRa: DEBUG 10");
                       &TaskUpdateLightHandle, // Task handle to keep track of created task
                       1);                     // Do the TaskLed job on the separate core 1
   }
+
   #ifdef DEBUG_MLS
     // Additional tests at boot
+
+    struct LIGHT_PACKET test_light_packet;
+    if (LIGHT_PACKET_SIZE != sizeof(test_light_packet.raw)) {
+      DEBUG_PRINT("Light packet size error!");
+      while(true);
+    }
+
+    struct MLS_PACKET test_mls_packet;
+    if (MLS_PACKET_SIZE != sizeof(test_mls_packet.raw)) {
+      DEBUG_PRINT("MLS packet size error!");
+      while(true);
+    }
+
+    struct STRIP_DATA test_strip_data;
+    if (STRIP_DATA_SIZE != sizeof(test_strip_data.raw)) {
+      DEBUG_PRINT("Strip data size error!");
+      while(true);
+    }
+
+    struct FLIP_DATA test_flip_data;
+    if (FLIP_DATA_SIZE != sizeof(test_flip_data.raw)) {
+      DEBUG_PRINT("Flip data size error!");
+      while(true);
+    }
+
+    #ifdef ARDUINO_TTGO_LoRa32_v21new
+      struct REMOTE_CONTROL_PACKET test_remote_control_packet;
+      if (REMOTE_CONTROL_PACKET_SIZE != sizeof(test_remote_control_packet.raw)) {
+        DEBUG_PRINT("Remote control packet size error!");
+        while(true);
+      }
+    #endif
+
+    struct ACTION_PACKET test_action_packet;
+    if (ACTION_PACKET_SIZE != sizeof(test_action_packet.raw)) {
+      DEBUG_PRINT("Action packet size error!");
+      while(true);
+    }
+
+    // Some light effects at the beginning...
+    /*
     DEBUG_PRINTLN("PROGRESS4 test for 2 seconds");
-    mlslighteffects.setLightData(millis(), (LIGHT_PACKET){EFFECT_PROGRESS4, MODIFIER_REPEAT + MODIFIER_FLIP_FLOP, millis(), 400, 0, 255, 255, 0, 45, 10, 45, 0, 255, 255, 45, 10, 45});
+    light_packet = (LIGHT_PACKET){EFFECT_PROGRESS4, MODIFIER_REPEAT + MODIFIER_FLIP_FLOP, millis(), 400, 0, 255, 255, 0, 45, 10, 45, 0, 255, 255, 45, 10, 45};
+    mlslighteffects.setLightData(millis(), &light_packet);
     delay(2000);
     DEBUG_PRINTLN("PROGRESS test for 2 seconds");
-    mlslighteffects.setLightData(millis(), (LIGHT_PACKET){EFFECT_PROGRESS, MODIFIER_FLIP_FLOP, millis(), 100, 0, 255, 140, 0, 45, 10, 45, 255, 140, 0, 45, 10, 45});
+    light_packet = (LIGHT_PACKET){EFFECT_PROGRESS, MODIFIER_FLIP_FLOP, millis(), 100, 0, 255, 140, 0, 45, 10, 45, 255, 140, 0, 45, 10, 45};
+    mlslighteffects.setLightData(millis(), &light_packet);
     delay(2000);
     DEBUG_PRINTLN("STROBE test for 1 seconds");
-    mlslighteffects.setLightData(millis(), (LIGHT_PACKET){EFFECT_STROBE, 0, millis(), 100, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0});
+    light_packet = (LIGHT_PACKET){EFFECT_STROBE, 0, millis(), 120, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+    mlslighteffects.setLightData(millis(), &light_packet);
     delay(1000);
-    mlslighteffects.setLightData(millis(), (LIGHT_PACKET){EFFECT_PROGRESS_RAINBOW, MODIFIER_REPEAT, millis(), 1500, 0, 0, 255, 0, 12, 5, 12, 0, 255, 0, 12, 5, 12}); // RAINBOW 1500
+    */
   #endif
 
+  // Rainbow check for at least 1 second + WIFI connection time
+  light_packet = (LIGHT_PACKET){EFFECT_PROGRESS_RAINBOW, MODIFIER_REPEAT, millis(), 1212, 0, 0, 255, 0, 12, 5, 12, 0, 255, 0, 12, 5, 12}; // RAINBOW 1212
+  mlslighteffects.setLightData(millis(), &light_packet);
   delay(1000);
 
   #ifdef FORCE_SLAVE
@@ -521,7 +775,9 @@ DEBUG_PRINTLN("SETUP: LoRa: DEBUG 10");
   DEBUG_PRINTLN("Board: " + String(ARDUINO_BOARD));
   
   if (MLS_masterMode) {
-    DEBUG_PRINTLN("Mode: MASTER");
+    my_device.id = 0;
+    
+    DEBUG_PRINTLN("Mode: Bass drum (ESPNOW master)");
     #ifdef ARDUINO_TTGO_LoRa32_v21new
       display.setTextAlignment(TEXT_ALIGN_LEFT);
       display.setFont(ArialMT_Plain_10);
@@ -529,7 +785,7 @@ DEBUG_PRINTLN("SETUP: LoRa: DEBUG 10");
       display.display();
     #endif
   } else {
-    DEBUG_PRINTLN("Mode: SLAVE");
+    DEBUG_PRINTLN("Mode: Musician (ESPNOW slave)");
     #ifdef ARDUINO_TTGO_LoRa32_v21new
       display.setTextAlignment(TEXT_ALIGN_LEFT);
       display.setFont(ArialMT_Plain_10);
@@ -581,11 +837,34 @@ DEBUG_PRINTLN("SETUP: LoRa: DEBUG 10");
       }
     #endif
   }
+
+  // Initialize some randomness
+  #ifdef RANDOM_INIT_PIN
+    #if RANDOM_INIT_PIN > -1
+      randomSeed(analogRead(RANDOM_INIT_PIN));
+    #endif
+  #endif
 }
 
 
 /// LOOP /// LOOP /// LOOP /// LOOP ///
 void loop() {
+
+  // Always : initial ESPNOW sync check in acceptable delay
+  if ((!MLS_masterMode) && (!MLS_remoteControl) && (!OneEspNowPacketReceived) && (millis() > MLSMESH_MAX_MS_FIRST_PACKET)) {
+    DEBUG_PRINT("WARNING: Device restarted , still no ESPNOW packet received ");
+    DEBUG_PRINT(MLSMESH_MAX_MS_FIRST_PACKET);
+    DEBUG_PRINTLN(" ms after boot");
+    ESP.restart();
+  }
+
+  // Always : ESPNOW keep alive packet from the master if needed
+  if ((MLS_masterMode) && ((millis() - mlsmeshLastPacketSentMs) > MLSMESH_MASTER_TIMEOUT_MS)) {
+    mlsmeshLastPacketSentMs = mlsmeshLastPacketSentMs + 2000; // Set next trial in 2 seconds
+    DEBUG_PRINTLN("LOOP: ESPNOW keep alive packet sent, because timeout check time is now over.");
+    action_packet.action = MLS_ACTION_KEEP_ALIVE;
+    boolean sendResult = mlsmesh_send_packet(MLS_TYPE_ACTION_DATA, (uint8_t *) &action_packet);
+  }
 
   // STATE_START // STATE_START // STATE_START // STATE_START //
 
@@ -608,7 +887,16 @@ void loop() {
     DEBUG_PRINTLN();
     DEBUG_PRINTLN("LOOP: STATE_START: WiFi MAC address: " + String(WiFi.macAddress()));
 
-    // Reset Wifi detection if encoder button is pressed during boot
+    WiFi.macAddress(my_device.mac);
+    if (MLS_masterMode) {
+      announced_devices = 1;
+      my_device.id = 0;
+      WiFi.macAddress(devices[my_device.id].mac);
+    } else {
+      WiFi.macAddress(my_device.mac);
+    }
+
+    // Reset Wifi detection and force firmware update if encoder button is pressed before boot
     #ifdef ROTARY_ENCODER_A_PIN
       rotaryEncoder.begin();
       rotaryEncoder.setup(readEncoderISR);
@@ -617,6 +905,7 @@ void loop() {
         DEBUG_PRINTLN("LOOP: STATE_START: Reset Wifi detection");
         mlstools.config.ssid1validated = 0;
         mlstools.config.ssid2validated = 0;
+        forceFirmwareUpdate = true;
       }
     #endif
     
@@ -663,8 +952,10 @@ void loop() {
           DEBUG_PRINTLN("LOOP: STATE_WIFI_SCAN: No Wifi connection detected");
           state = STATE_WIFI_FINISHED;
           forceFirmwareUpdateTrial++;
-          if (forceFirmwareUpdateTrial > MAX_UPDATE_FIRMWARE_TRIALS) {
+          if (forceFirmwareUpdateTrial > MAX_FORCE_FIRMWARE_TRIALS) {
             forceFirmwareUpdate = false; // To avoid infinite loop if Wifi is not present
+          } else if (forceFirmwareUpdateTrial > 1) {
+            delay(random(MIN_FORCE_FIRMWARE_WAIT_MS, MAX_FORCE_FIRMWARE_WAIT_MS));
           }
         }
       } else if (wifiStep == WIFI_SCAN_SSID1) {
@@ -700,9 +991,11 @@ void loop() {
       FastLED.setBrightness(LED_CONFIG_BRIGHTNESS);
       mlslighteffects.stopUpdate();
       delay(10);
-      mlslighteffects.fillAll(CRGB::Green);
-      FastLED.show();
-      mlslighteffects.setLightData(millis(), (LIGHT_PACKET){EFFECT_FLASH, MODIFIER_REPEAT, millis(), 300, 0, 0, 255, 0, 12, 5, 12, 0, 255, 0, 12, 5, 12}); // GREEN/GREEN FLASH (wave) 300
+      mlslighteffects.fill(CRGB::Green, NUM_LEDS_PER_STRIP, leftLeds);
+      mlslighteffects.fill(CRGB::Green, NUM_LEDS_PER_STRIP, rightLeds);
+      mlslighteffects.showLeds();
+      light_packet = (LIGHT_PACKET){EFFECT_FLASH, MODIFIER_REPEAT, millis(), 300, 0, 0, 255, 0, 12, 5, 12, 0, 255, 0, 12, 5, 12}; // GREEN/GREEN FLASH (wave) 300
+      mlslighteffects.setLightData(millis(), &light_packet);
     if (wifiStep == WIFI_SCAN_SSID1) {
       mlstools.config.ssid1validated = 1;
     } else if (wifiStep == WIFI_SCAN_SSID2) {
@@ -729,7 +1022,7 @@ void loop() {
         if (MLS_masterMode) {
           DEBUG_PRINTLN("LOOP: STATE_WIFI_CONNECTED: Firmware update forced dispatched to other devices");
           action_packet.action = MLS_ACTION_FORCE_UPDATE;
-          boolean sendResult = sendMeshPacket(MLS_TYPE_ACTION_DATA, millis(), (uint8_t *) &action_packet);
+          boolean sendResult = mlsmesh_send_packet(MLS_TYPE_ACTION_DATA, (uint8_t *) &action_packet);
         }
         /*
         if (TaskUpdateLightHandle != NULL) {
@@ -747,14 +1040,20 @@ void loop() {
         display.display();
       #endif
       FastLED.setBrightness(LED_CONFIG_BRIGHTNESS);
-      mlslighteffects.fillAll(CRGB::Blue);
-      FastLED.show();
-      mlslighteffects.setLightData(millis(), (LIGHT_PACKET){EFFECT_PROGRESS4, MODIFIER_REPEAT, millis(), 600, 0, 0, 0, 255, 45, 10, 45, 0, 0, 255, 45, 10, 45}); // BLUE/BLUE PROGRESS4 600
+      mlslighteffects.stopUpdate();
+      delay(10);
+      mlslighteffects.fill(CRGB::Blue, NUM_LEDS_PER_STRIP, leftLeds);
+      mlslighteffects.fill(CRGB::Blue, NUM_LEDS_PER_STRIP, rightLeds);
+      mlslighteffects.showLeds();
+      light_packet = (LIGHT_PACKET){EFFECT_PROGRESS4, MODIFIER_REPEAT, millis(), 600, 0, 0, 0, 255, 45, 10, 45, 0, 0, 255, 45, 10, 45}; // BLUE/BLUE PROGRESS4 600
+      mlslighteffects.setLightData(millis(), &light_packet);
       delay(1000);
       mlsota.otaUpdates();
-      mlslighteffects.fillAll(CRGB::Black);
-      FastLED.show();
       mlslighteffects.stopUpdate();
+      delay(10);
+      mlslighteffects.fill(CRGB::Black, NUM_LEDS_PER_STRIP, leftLeds);
+      mlslighteffects.fill(CRGB::Black, NUM_LEDS_PER_STRIP, rightLeds);
+      mlslighteffects.showLeds();
     }
     mlstools.importConfiguration(mlsota.otaDownloadOptions(mlstools.config));
 
@@ -784,14 +1083,19 @@ void loop() {
       }
     }
     // FastLED.setBrightness(LED_TEST_BRIGHTNESS - ((millis() / (5 * (255 / LED_TEST_BRIGHTNESS))) % (LED_TEST_BRIGHTNESS - 16)));
-    // FastLED.show();
+    // mlslighteffects.showLeds();
   }
 
   // STATE_WIFI_FINISHED // STATE_WIFI_FINISHED // STATE_WIFI_FINISHED // STATE_WIFI_FINISHED //
 
   if (state == STATE_WIFI_FINISHED) {
     DEBUG_PRINTLN();
+    mlstools.saveConfiguration();
+    mlslighteffects.stopUpdate();
+    delay(100);
+    FastLED.setBrightness(LED_CONFIG_BRIGHTNESS);
 
+    memcpy(gIID, mlstools.config.iid, 3);
     MLS_remoteControl = mlstools.config.remote;
 
     // No TaskUpdateLight for the remote control
@@ -802,24 +1106,21 @@ void loop() {
     }
 
     #ifdef ARDUINO_TTGO_LoRa32_v21new
-    if (LoraIsUp) {
-      if (MLS_remoteControl) {
-        DEBUG_PRINTLN("LOOP: STATE_WIFI_FINISHED: Remote control: ACTIVATED");
-        display.setTextAlignment(TEXT_ALIGN_RIGHT);
-        display.setFont(ArialMT_Plain_10);
-        display.drawString(127, 26, "LoRa RC");
-        display.display();
-      } else {
-        DEBUG_PRINTLN("LOOP: STATE_WIFI_FINISHED: Remote control: RECEIVER ONLY");
-        display.setTextAlignment(TEXT_ALIGN_RIGHT);
-        display.setFont(ArialMT_Plain_10);
-        display.drawString(127, 26, "LoRa OK");
-        display.display();
+      if (LoraIsUp) {
+        if (MLS_remoteControl) {
+          DEBUG_PRINTLN("LOOP: STATE_WIFI_FINISHED: Remote control: ACTIVATED");
+          display.setTextAlignment(TEXT_ALIGN_RIGHT);
+          display.setFont(ArialMT_Plain_10);
+          display.drawString(127, 26, "LoRa RC");
+          display.display();
+        } else {
+          DEBUG_PRINTLN("LOOP: STATE_WIFI_FINISHED: Remote control: RECEIVER ONLY");
+          display.setTextAlignment(TEXT_ALIGN_RIGHT);
+          display.setFont(ArialMT_Plain_10);
+          display.drawString(127, 26, "LoRa OK");
+          display.display();
+        }
       }
-    }
-  #endif
-    
-    #ifdef ARDUINO_TTGO_LoRa32_v21new
       display.setTextAlignment(TEXT_ALIGN_RIGHT);
       display.setFont(ArialMT_Plain_10);
       display.drawString(127, 0, mlstools.config.uniqueid);
@@ -827,16 +1128,14 @@ void loop() {
     #endif
     
     #ifdef ROTARY_ENCODER_A_PIN
-      rotaryEncoder.setBoundaries(0, 4, false);
-      rotaryEncoder.setEncoderValue(mlstools.config.column);
       mlslighteffects.stopUpdate();
       delay(10);
-      FastLED.setBrightness(LED_CONFIG_BRIGHTNESS);
-      mlslighteffects.setValueAll(rotaryEncoder.readEncoder(), 4, MLS_FADED_BLUE, MLS_FADED_BLUE, CRGB::Green, CRGB::Red);
-      FastLED.show();
+      rotaryEncoder.setBoundaries(0, 4, false);
+      rotaryEncoder.setEncoderValue(mlstools.config.column);
+      mlslighteffects.setValue(mlstools.config.column, INITIAL_COLUMNS, MLS_FADED_BLUE, MLS_FADED_BLUE, CRGB::Green, CRGB::Red, leftLeds);
+      mlslighteffects.setValue(mlstools.config.column, INITIAL_COLUMNS, MLS_FADED_BLUE, MLS_FADED_BLUE, CRGB::Green, CRGB::Red, rightLeds);
+      mlslighteffects.showLeds();
     #endif
-
-    WiFi.disconnect();
 
     #ifdef BLE_SERVER
       // Create the BLE Device
@@ -885,15 +1184,18 @@ void loop() {
 
   if (state > STATE_WIFI_FINISHED) {
     #ifdef ARDUINO_ESP32_DEV
-      forceFirmwareUpdate = forceFirmwareUpdate || (0 == digitalRead(0));
+    // This is not working anymore, depending how port 0 is used
+      // forceFirmwareUpdate = forceFirmwareUpdate || (0 == digitalRead(FORCE_FIRMWARE_UPDATE_PIN));
     #endif
     if (forceFirmwareUpdate) {
       mlstools.config.ssid1validated = 0;
       mlstools.config.ssid2validated = 0;
       FastLED.setBrightness(LED_CONFIG_BRIGHTNESS);
-      mlslighteffects.fillAll(MLS_DARK_ORANGE);
-      FastLED.show();
-      mlslighteffects.setLightData(millis(), (LIGHT_PACKET){EFFECT_PROGRESS, MODIFIER_FLIP_FLOP, millis(), 300, 0, 255, 140, 0, 45, 10, 45, 255, 140, 0, 45, 10, 45}); // MLS_DARK_ORANGE
+      mlslighteffects.fill(MLS_DARK_ORANGE, NUM_LEDS_PER_STRIP, leftLeds);
+      mlslighteffects.fill(MLS_DARK_ORANGE, NUM_LEDS_PER_STRIP, rightLeds);
+      mlslighteffects.showLeds();
+      light_packet = (LIGHT_PACKET){EFFECT_PROGRESS, MODIFIER_FLIP_FLOP, millis(), 300, 0, 255, 140, 0, 45, 10, 45, 255, 140, 0, 45, 10, 45}; // MLS_DARK_ORANGE
+      mlslighteffects.setLightData(millis(), &light_packet);
       DEBUG_PRINTLN();
       DEBUG_PRINTLN("LOOP: STATE_WIFI_FINISHED: Force firmware update");
       state = STATE_START;
@@ -919,9 +1221,14 @@ void loop() {
       #ifdef ROTARY_ENCODER_A_PIN
         if (rotaryEncoder.encoderChanged()) {
           DEBUG_PRINTLN("Column: " + String(rotaryEncoder.readEncoder()));
-          mlslighteffects.setValueAll(rotaryEncoder.readEncoder(), 4, MLS_FADED_BLUE, MLS_FADED_BLUE, CRGB::Green, CRGB::Red);
-          configMaxTime = (micros() - stateStartTime) + CONFIG_MAX_TIME;
-          FastLED.show();
+          mlslighteffects.setValue(rotaryEncoder.readEncoder(), INITIAL_COLUMNS, MLS_FADED_BLUE, MLS_FADED_BLUE, CRGB::Green, CRGB::Red, leftLeds);
+          mlslighteffects.setValue(rotaryEncoder.readEncoder(), INITIAL_COLUMNS, MLS_FADED_BLUE, MLS_FADED_BLUE, CRGB::Green, CRGB::Red, rightLeds);
+          mlslighteffects.showLeds();
+          #ifdef DEBUG_MLS
+            configTimeOutTime = (micros() - stateStartTime) + CONFIG_TIMEOUT_TIME_DEBUG;
+          #else
+            configTimeOutTime = (micros() - stateStartTime) + CONFIG_TIMEOUT_TIME;
+          #endif
         }
         if (rotaryEncoder.isEncoderButtonClicked()) {
           DEBUG_PRINTLN("Column selected: " + String(rotaryEncoder.readEncoder()));
@@ -930,14 +1237,14 @@ void loop() {
             rotaryEncoder.setBoundaries(0, NUM_LEDS_PER_STRIP, false);
             rotaryEncoder.setEncoderValue(mlstools.config.rank);
             // Set already the next selection color
-            mlslighteffects.setValueThreeLeft(rotaryEncoder.readEncoder(), NUM_LEDS_PER_STRIP, MLS_FADED_BLUE, MLS_WHITE192, CRGB::Green, MLS_RED224);
-            FastLED.show();
+            mlslighteffects.setValueThree(mlstools.config.rank, NUM_LEDS_PER_STRIP, MLS_FADED_BLUE, MLS_WHITE192, CRGB::Green, MLS_RED224, leftLeds);
+            mlslighteffects.showLeds();
           #endif
           configStep = CONFIG_RANK;
         }
       #endif
       // CONFIG_TIMEOUT // CONFIG_TIMEOUT // CONFIG_TIMEOUT // CONFIG_TIMEOUT //
-      if ((micros() - stateStartTime) >= configMaxTime) {
+      if ((micros() - stateStartTime) >= configTimeOutTime) {
         DEBUG_PRINTLN("LOOP: STATE_CONFIG: Config skipped after timeout");
         stateStartTime = micros();
         state = STATE_CONFIG_DONE;
@@ -949,8 +1256,8 @@ void loop() {
       #ifdef ROTARY_ENCODER_A_PIN
         if (rotaryEncoder.encoderChanged()) {
           DEBUG_PRINTLN("Rank: " + String(rotaryEncoder.readEncoder()));
-          mlslighteffects.setValueThreeLeft(rotaryEncoder.readEncoder(), NUM_LEDS_PER_STRIP, MLS_FADED_BLUE, MLS_WHITE192, CRGB::Green, MLS_RED224);
-          FastLED.show();
+          mlslighteffects.setValueThree(rotaryEncoder.readEncoder(), NUM_LEDS_PER_STRIP, MLS_FADED_BLUE, MLS_WHITE192, CRGB::Green, MLS_RED224, leftLeds);
+          mlslighteffects.showLeds();
         }
         if (rotaryEncoder.isEncoderButtonClicked()) {
           DEBUG_PRINTLN("Rank selected: " + String(rotaryEncoder.readEncoder()));
@@ -964,10 +1271,12 @@ void loop() {
   // STATE_CONFIG_DONE // STATE_CONFIG_DONE // STATE_CONFIG_DONE // STATE_CONFIG_DONE //
 
   if (state == STATE_CONFIG_DONE) {
+    mlslighteffects.setMyColumn(mlstools.config.column);
+    mlslighteffects.setMyRank(mlstools.config.rank);
     mlslighteffects.stopUpdate();
     delay(10);
-    FastLED.clear();
-    FastLED.show();
+    mlslighteffects.clearLeds();
+    mlslighteffects.showLeds();
     // Save options
     if (mlstools.saveConfiguration()) {
       if (WiFi.status() == WL_CONNECTED) {
@@ -979,7 +1288,7 @@ void loop() {
       #ifdef BLE_SERVER
         // De-init BLE server if needed
         if (BLEDevice::getInitialized() == true){
-          DEBUG_PRINTLN("LOOP: STATE_SUBSCRIBE: BLE server disabled");
+          DEBUG_PRINTLN("LOOP: STATE_CONFIG_DONE: BLE server disabled");
           BLEDevice::deinit(false);
         }
       #endif
@@ -987,9 +1296,6 @@ void loop() {
       WiFi.setSleep(false);
       ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
     }
-  
-
-
     
     if (WiFi.status() == WL_CONNECTED) {
       WiFi.disconnect();
@@ -1006,6 +1312,7 @@ void loop() {
     // No subscribe state yet for remote control
     if (MLS_remoteControl) {
       state = STATE_RUNNING;
+      startStateRunningTS = millis();
     } else {
       state = STATE_SUBSCRIBE;
     }
@@ -1016,63 +1323,90 @@ void loop() {
   if (state == STATE_SUBSCRIBE) {
     if (lastState != state) {
       DEBUG_PRINTLN("STATE_SUBSCRIBE");
-    }
 
-    runningBrightness = LED_MAX_BRIGHTNESS;
-    #ifdef ROTARY_ENCODER_A_PIN
-      #ifdef ROTARY_CHANGE_BRIGHTNESS
-        uint8_t min_brightness = (LED_MIN_BRIGHTNESS + 1)/16;
-        if (min_brightness < 1) {
-          min_brightness = 1;
-        }
-        rotaryEncoder.setBoundaries(min_brightness, (LED_MAX_BRIGHTNESS + 1)/16, false);
-        rotaryEncoder.setEncoderValue((runningBrightness + 1) / 16);
+      runningBrightness = LED_MAX_BRIGHTNESS;
+      #ifdef ROTARY_ENCODER_A_PIN
+        #ifdef ROTARY_CHANGE_BRIGHTNESS
+          uint8_t min_brightness = (LED_MIN_BRIGHTNESS + 1)/16;
+          if (min_brightness < 1) {
+            min_brightness = 1;
+          }
+          rotaryEncoder.setBoundaries(min_brightness, (LED_MAX_BRIGHTNESS + 1)/16, false);
+          rotaryEncoder.setEncoderValue((runningBrightness + 1) / 16);
+        #endif
       #endif
-    #endif
-    FastLED.setBrightness(runningBrightness);
-
-    // Initializing ESPNOW for MLS
-
-    WiFi.mode(WIFI_STA);
-    WiFi.setTxPower(WIFI_POWER_19_5dBm);
-    esp_wifi_set_protocol(ESP_IF_WIFI_STA, WIFI_PROTOCOL_11B);
-
-    // WiFi.setSleep(false);
-    ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_MIN_MODEM)); // To allow BLE
-
-    esp_wifi_set_promiscuous(true);
-    esp_wifi_set_promiscuous_rx_cb(&promiscuous_rx_cb);
-
-    if (esp_now_init() != ESP_OK) {
-      DEBUG_PRINTLN("LOOP: STATE_SUBSCRIBE: Error initializing ESP-NOW");
-    } else {
-      #ifdef DEBU_MLS
-        esp_now_register_send_cb(OnEspNowDataSent);
-      #endif
-      esp_now_register_recv_cb(OnEspNowDataRecv);
+      FastLED.setBrightness(runningBrightness);
   
-      // register peer
-      esp_now_peer_info_t peerInfo = {}; // peerInfo must be initialized, otherwise it doesn't always work ! (ESPNOW: Peer interface is invalid)
-      peerInfo.channel = ESPNOW_CHANNEL;  
-      peerInfo.encrypt = false;
+      // Initializing ESPNOW for MLS, except for remote control
+      if (!MLS_remoteControl) {
+        WiFi.mode(WIFI_STA);
+        WiFi.setTxPower(WIFI_POWER_19_5dBm);
+        esp_wifi_set_protocol(ESP_IF_WIFI_STA, WIFI_PROTOCOL_11B);
     
-      // register first peer  
-      memcpy(peerInfo.peer_addr, espnowBroadcastAddress, 6);
-      if (esp_now_add_peer(&peerInfo) != ESP_OK){
-        DEBUG_PRINTLN("LOOP: STATE_SUBSCRIBE: ESPNOW: dailed to add peer");
-      } else {
-        DEBUG_PRINTLN("LOOP: STATE_SUBSCRIBE: ESPNOW: broadcast peer added");
+        // WiFi.setSleep(false);
+        ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_MIN_MODEM)); // To allow BLE
+    
+        esp_wifi_set_promiscuous(true);
+        esp_wifi_set_promiscuous_rx_cb(&mlsmesh_promiscuous_rx_cb);
+    
+        if (esp_now_init() != ESP_OK) {
+          DEBUG_PRINTLN("LOOP: STATE_SUBSCRIBE: Error initializing ESP-NOW");
+          ESP.restart();
+        } else {
+          #ifdef DEBU_MLS
+            esp_now_register_send_cb(OnEspNowDataSent);
+          #endif
+          esp_now_register_recv_cb(mlsmesh_receive_packet_cb);
+      
+          // register peer
+          esp_now_peer_info_t peerInfo = {}; // peerInfo must be initialized, otherwise it doesn't always work ! (ESPNOW: Peer interface is invalid)
+          peerInfo.channel = MLSMESH_CHANNEL;  
+          peerInfo.encrypt = false;
+        
+          // register first peer  
+          memcpy(peerInfo.peer_addr, espnowBroadcastAddress, 6);
+          if (esp_now_add_peer(&peerInfo) != ESP_OK){
+            DEBUG_PRINTLN("LOOP: STATE_SUBSCRIBE: ESPNOW: refused to add peer");
+            ESP.restart();
+          } else {
+            DEBUG_PRINTLN("LOOP: STATE_SUBSCRIBE: ESPNOW: broadcast peer added");
+          }
+        }
       }
+  
+      if (MLS_masterMode) {
+        delay(1000);
+        DEBUG_PRINTLN("LOOP: STATE_SUBSCRIBE: Send reboot request");
+        action_packet.action = MLS_ACTION_REBOOT;
+        boolean sendResult = mlsmesh_send_packet(MLS_TYPE_ACTION_DATA, (uint8_t *) &action_packet);
+      }
+  
+      /*
+      DEBUG_PRINTLN("CHECK test for 30 seconds");
+      for (uint8_t i = 0; i < 30; i++) {
+        light_packet = (LIGHT_PACKET){EFFECT_CHECK, 0, i, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+        mlslighteffects.setLightData(millis(), &light_packet);
+        delay(1000);
+      }
+      */
+
     }
 
-    if (MLS_masterMode) {
-      delay(1000);
-      DEBUG_PRINTLN("LOOP: STATE_SUBSCRIBE: Send reboot request");
-      action_packet.action = MLS_ACTION_REBOOT;
-      boolean sendResult = sendMeshPacket(MLS_TYPE_ACTION_DATA, millis(), (uint8_t *) &action_packet);
+    if (my_device.id != 0xFF) {
+      DEBUG_PRINT("my_device.id: "); DEBUG_PRINT(my_device.id);
+      state = STATE_RUNNING;
+      startStateRunningTS = millis();
+    } else {
+      if ((millis() - lastSubscribeTimeMs) > SUBSCRIBE_RETRY_TIME_MS) {
+        topology_packet.type = MLS_TOPOLOGY_REQUEST;
+        topology_packet.device_id = my_device.id;
+        memcpy(topology_packet.mac, my_device.mac, 6);
+        topology_packet.rank = mlslighteffects.getMyRank();
+        topology_packet.column = mlslighteffects.getMyColumn();
+        sendResult = mlsmesh_send_packet(MLS_TYPE_TOPOLOGY_DATA, (uint8_t *) &topology_packet);
+      }
+      lastSubscribeTimeMs = millis();
     }
-
-    state = STATE_RUNNING;
   }
 
   // STATE_RUNNING // STATE_RUNNING // STATE_RUNNING // STATE_RUNNING //
@@ -1083,108 +1417,151 @@ void loop() {
       DEBUG_PRINTLN("STATE_RUNNING");
     }
 
+    #ifdef ARDUINO_TTGO_LoRa32_v21new
+      if ((millis() - lastdisplayUpdateTime) > OLED_INFO_REFRESH_TIME) {
+        uint32_t seconds = millis() / 1000;
+        uint32_t minutes = seconds / 60;
+        uint32_t hours = minutes / 60;
+        display.setColor(BLACK);
+        display.fillRect(0, 26, 50, 10);
+        sprintf(tempStr, "%02d:%02d:%02d", hours%24, minutes%60, seconds%60);
+        display.setColor(WHITE);
+        display.setTextAlignment(TEXT_ALIGN_LEFT);
+        display.setFont(ArialMT_Plain_10);
+        display.drawString(0, 26, tempStr);
+        display.display();
+        lastdisplayUpdateTime = millis();
+      }
+    #endif
+
+
+    // Repeat last CHECK command
+    if (MLS_masterMode) {
+      if (EFFECT_CHECK == lastCommand) {
+        if ((millis() - mlsmeshLastPacketSentMs) > CHECK_RESEND_TIME_MS) {
+          checkCounter++;
+          light_packet = (LIGHT_PACKET){lastCommand, 0, checkCounter, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+          boolean sendResult = mlsmesh_send_packet(MLS_TYPE_LIGHT_DATA, (uint8_t *) &light_packet);
+        }
+      } else {
+        checkCounter = 0;
+      }
+    }
+
     #if defined(I2S_WS_PIN) && defined(I2S_SCK_PIN) && defined(I2S_SD_PIN)
-      if (i2sEnabled) {
-        // https://github.com/maspetsberger/esp32-i2s-mems/tree/master/examples/NoiseLevel
-        // https://diyi0t.com/i2s-sound-tutorial-for-esp32/
-        int32_t samples[I2S_BLOCK_SIZE];
-        int32_t num_bytes_read = i2s_read_bytes(I2S_PORT, 
-                                                (char *)samples, 
-                                                I2S_BLOCK_SIZE, // the doc says bytes, but its elements.
-                                                portMAX_DELAY); // no timeout
-        if (num_bytes_read > 0) {
-          int samples_read = num_bytes_read / 8;
-          int32_t mean = 0;
-          for (int i = 0; i < samples_read; ++i) {
-            mean += (abs(samples[i]) / samples_read);
-          }
-          mean = abs(mean);
-          // Ignore incorrect values
-          if (mean > 0x10000000) {
-            mean = 0x10000000;
-          }
-          if (mean < 1) {
-            mean = 1;
-          }
-          
-          if (mean > i2s_biggestInput) {
-            i2s_biggestInput = mean;
-          }
-
-          i2s_rolling_mean[i2s_sampleCounter % I2S_ROLLING_MEAN_SIZE] = mean;
-          // i2s_long_term_mean = ((I2S_ROLLING_MEAN_SIZE * i2s_long_term_mean) + mean) / (I2S_ROLLING_MEAN_SIZE + 1);
-          i2s_long_term_mean = 0;
-          for (int i = 0; i < I2S_ROLLING_MEAN_SIZE; ++i) {
-            i2s_long_term_mean = i2s_long_term_mean + (i2s_rolling_mean[i] / I2S_ROLLING_MEAN_SIZE);
-            if (i2s_rolling_mean[i] > i2s_rollingmaxInput) {
-              i2s_rollingmaxInput = i2s_rolling_mean[i];
+      if (MLS_masterMode) {
+        if (i2sEnabled) {
+          // https://github.com/maspetsberger/esp32-i2s-mems/tree/master/examples/NoiseLevel
+          // https://diyi0t.com/i2s-sound-tutorial-for-esp32/
+          int32_t samples[I2S_BLOCK_SIZE];
+          int32_t num_bytes_read = i2s_read_bytes(I2S_PORT, 
+                                                  (char *)samples, 
+                                                  I2S_BLOCK_SIZE, // the doc says bytes, but its elements.
+                                                  portMAX_DELAY); // no timeout
+          if (num_bytes_read > 0) {
+            int samples_read = num_bytes_read / 8;
+            int32_t mean = 0;
+            for (int i = 0; i < samples_read; ++i) {
+              mean += (abs(samples[i]) / samples_read);
             }
-          }
-
-          if (mean > i2s_maxInput) {
-            i2s_maxInput = mean;
-            i2s_maxInputTime = micros();
-            i2s_secondtMaxInput = 0;
-          } else if (((micros() - i2s_maxInputTime) > (i2s_maxInputFlushTime / 2)) && (mean > i2s_secondtMaxInput)) {
-            i2s_secondtMaxInput = mean;
-          }
-          if ((micros() - i2s_maxInputTime) > i2s_maxInputFlushTime) {
-            if (i2s_secondtMaxInput < (0.5 * i2s_maxInput)) {
-              i2s_secondtMaxInput = 0.5 * i2s_maxInput;
-            } else {
-              i2s_maxInput = i2s_secondtMaxInput;
+            mean = abs(mean);
+            // Ignore incorrect values
+            if (mean > 0x10000000) {
+              mean = 0x10000000;
             }
-            i2s_maxInputTime = micros();
-            i2s_secondtMaxInput = 0;
-          } else if ((micros() - i2s_maxInputTime) > i2s_inputFlushTime) {
-            if (i2s_secondtMaxInput > (0.5 * i2s_maxInput)) {
-              i2s_maxInput = i2s_secondtMaxInput;
+            if (mean < 1) {
+              mean = 1;
+            }
+            
+            if (mean > i2s_biggestInput) {
+              i2s_biggestInput = mean;
+            }
+  
+            i2s_rolling_mean[i2s_sampleCounter % I2S_ROLLING_MEAN_SIZE] = mean;
+            // i2s_long_term_mean = ((I2S_ROLLING_MEAN_SIZE * i2s_long_term_mean) + mean) / (I2S_ROLLING_MEAN_SIZE + 1);
+            i2s_long_term_mean = 0;
+            for (int i = 0; i < I2S_ROLLING_MEAN_SIZE; ++i) {
+              i2s_long_term_mean = i2s_long_term_mean + (i2s_rolling_mean[i] / I2S_ROLLING_MEAN_SIZE);
+              if (i2s_rolling_mean[i] > i2s_rollingmaxInput) {
+                i2s_rollingmaxInput = i2s_rolling_mean[i];
+              }
+            }
+  
+            if (mean > i2s_maxInput) {
+              i2s_maxInput = mean;
               i2s_maxInputTime = micros();
               i2s_secondtMaxInput = 0;
+            } else if (((micros() - i2s_maxInputTime) > (i2s_maxInputFlushTime / 2)) && (mean > i2s_secondtMaxInput)) {
+              i2s_secondtMaxInput = mean;
             }
-          }
+            if ((micros() - i2s_maxInputTime) > i2s_maxInputFlushTime) {
+              if (i2s_secondtMaxInput < (0.5 * i2s_maxInput)) {
+                i2s_secondtMaxInput = 0.5 * i2s_maxInput;
+              } else {
+                i2s_maxInput = i2s_secondtMaxInput;
+              }
+              i2s_maxInputTime = micros();
+              i2s_secondtMaxInput = 0;
+            } else if ((micros() - i2s_maxInputTime) > i2s_inputFlushTime) {
+              if (i2s_secondtMaxInput > (0.5 * i2s_maxInput)) {
+                i2s_maxInput = i2s_secondtMaxInput;
+                i2s_maxInputTime = micros();
+                i2s_secondtMaxInput = 0;
+              }
+            }
+  
+            if (i2s_maxInput < (i2s_biggestInput / 4)) {
+              i2s_maxInput = i2s_biggestInput / 4;
+            }
+  
+            if (mean < lastEdgeDectionLevel) {
+              overLastEdgeDectionLevel = false;
+            }
+  
+            // if ((((!overLastEdgeDectionLevel) && ((micros() - lastEdgeDectionTime) > minEdgeDetectionGap)) || ((micros() - lastEdgeDectionTime) > maxEdgeDetectionGap)) && (((mean / i2s_long_term_mean) > I2S_EDGE_RATIO_LONG_TERM) || (mean > (i2s_maxInput / I2S_EDGE_RATIO_INSTANT)))) {
+            if ((((!overLastEdgeDectionLevel) && ((micros() - lastEdgeDectionTime) > minEdgeDetectionGap)) || ((micros() - lastEdgeDectionTime) > maxEdgeDetectionGap)) && ((i2s_rollingmaxInput / mean) < I2S_EDGE_ROLLING_MAX)) {
+  
+              lastEdgeDectionLevel = mean;
+              overLastEdgeDectionLevel = true;
+              lastEdgeDectionTime = micros();
+              DEBUG_PRINT("BOOM :-), time (ms): ");
+              DEBUG_PRINT(micros()/1000);
+              DEBUG_PRINT(", level: ");
+              DEBUG_PRINTLN(mean);
+              DEBUG_PRINT("detectedBeatCounter: ");
+              DEBUG_PRINTLN(detectedBeatCounter);
 
-          if (i2s_maxInput < (i2s_biggestInput / 4)) {
-            i2s_maxInput = i2s_biggestInput / 4;
+              if (last_effect_played != current_beat_effect) {
+                detectedBeatCounter = 0;
+              }
+              last_effect_played = current_beat_effect;
+              light_packet = (LIGHT_PACKET){current_beat_effect, 0, detectedBeatCounter, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+              // light_packet = (LIGHT_PACKET){EFFECT_FLASH, MODIFIER_FLIP_FLOP, detectedBeatCounter, 0, 0, 255, 0, 0, 0, 3, 35, 0, 255, 0, 0, 3, 35}; // RED/GREEN FLASH FLIP-FLOP
+              mlslighteffects.setLightData(detectedBeatCounter, &light_packet);
+              boolean sendResult = mlsmesh_send_packet(MLS_TYPE_LIGHT_DATA, (uint8_t *) &light_packet);
+              detectedBeatCounter++;
+              /*
+              DEBUG_PRINT("BOOM :-) ");
+              DEBUG_PRINT(detectedBeatCounter);
+              DEBUG_PRINT(" value: ");
+              DEBUG_PRINT(mean);
+              DEBUG_PRINT(", biggest: ");
+              DEBUG_PRINT(i2s_biggestInput);
+              DEBUG_PRINT(", max: ");
+              DEBUG_PRINT(i2s_maxInput);
+              DEBUG_PRINT(", 2max: ");
+              DEBUG_PRINT(i2s_secondtMaxInput);
+              DEBUG_PRINT(", long term mean: ");
+              DEBUG_PRINT(i2s_long_term_mean);
+              DEBUG_PRINT(", ratio: ");
+              DEBUG_PRINTLN((mean / i2s_long_term_mean));
+              */
+            }
+              // DEBUG_PRINTLN(mean);
+            i2s_sampleCounter++;
           }
-
-          if (mean < lastEdgeDectionLevel) {
-            overLastEdgeDectionLevel = false;
-          }
-
-          // if ((((!overLastEdgeDectionLevel) && ((micros() - lastEdgeDectionTime) > minEdgeDetectionGap)) || ((micros() - lastEdgeDectionTime) > maxEdgeDetectionGap)) && (((mean / i2s_long_term_mean) > i2S_EDGE_RATIO_LONG_TERM) || (mean > (i2s_maxInput / i2S_EDGE_RATIO_INSTANT)))) {
-          if ((((!overLastEdgeDectionLevel) && ((micros() - lastEdgeDectionTime) > minEdgeDetectionGap)) || ((micros() - lastEdgeDectionTime) > maxEdgeDetectionGap)) && ((i2s_rollingmaxInput / mean) < i2S_EDGE_ROLLING_MAX)) {
-
-            lastEdgeDectionLevel = mean;
-            overLastEdgeDectionLevel = true;
-            lastEdgeDectionTime = micros();
-            DEBUG_PRINT("BOOM :-), time (ms): ");
-            DEBUG_PRINTLN(micros()/1000);
-            light_packet = (LIGHT_PACKET){EFFECT_FLASH, MODIFIER_FLIP_FLOP, detectedBeatCounter, 0, 0, 255, 0, 0, 0, 3, 35, 0, 255, 0, 0, 3, 35}; // RED/GREEN FLASH FLIP-FLOP
-            mlslighteffects.setLightData(detectedBeatCounter, light_packet);
-            boolean sendResult = sendMeshPacket(MLS_TYPE_LIGHT_DATA, millis(), (uint8_t *) &light_packet);
-            detectedBeatCounter++;
-            /*
-            DEBUG_PRINT("BOOM :-) ");
-            DEBUG_PRINT(detectedBeatCounter);
-            DEBUG_PRINT(" value: ");
-            DEBUG_PRINT(mean);
-            DEBUG_PRINT(", biggest: ");
-            DEBUG_PRINT(i2s_biggestInput);
-            DEBUG_PRINT(", max: ");
-            DEBUG_PRINT(i2s_maxInput);
-            DEBUG_PRINT(", 2max: ");
-            DEBUG_PRINT(i2s_secondtMaxInput);
-            DEBUG_PRINT(", long term mean: ");
-            DEBUG_PRINT(i2s_long_term_mean);
-            DEBUG_PRINT(", ratio: ");
-            DEBUG_PRINTLN((mean / i2s_long_term_mean));
-            */
-          }
-            // DEBUG_PRINTLN(mean);
-          i2s_sampleCounter++;
         }
-      }
+      } // if (MLS_masterMode)
     #endif
 
 	#ifdef ROTARY_ENCODER_A_PIN
@@ -1195,47 +1572,6 @@ void loop() {
         }
       #endif
     #endif
-
-/*
-    if (((millis() / 2000) % 10) == 0) {
-      if (simulatorEffect != EFFECT_PROGRESS) {
-        simulatorEffect = EFFECT_PROGRESS;
-        mlslighteffects.setLightData(millis(), (LIGHT_PACKET){EFFECT_PROGRESS, MODIFIER_FLIP_FLOP, millis(), 300, 0, 0, 0, 255, 45, 10, 45, 0, 255, 0, 45, 10, 45}); // BLUE/GREEN
-      }
-    } else if (((millis() / 2000) % 10) == 2) {
-      if (simulatorEffect != EFFECT_STROBE) {
-        simulatorEffect = EFFECT_STROBE;
-        mlslighteffects.setLightData(millis(), (LIGHT_PACKET){EFFECT_STROBE, 0, millis(), 100, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0});
-      }
-    } else if (((millis() / 2000) % 10) == 4) {
-      if (simulatorEffect != EFFECT_FLASH) {
-        simulatorEffect = EFFECT_FLASH;
-        mlslighteffects.setLightData(simulatorBeat, (LIGHT_PACKET){EFFECT_FLASH, MODIFIER_REPEAT, simulatorBeat, 500, 0, 255, 255, 0, 0, 3, 45, 255, 255, 0, 0, 3, 45}); // YELLOW LONG FLASH REPEAT
-      }
-    } else if (((millis() / 2000) % 10) == 6) {
-      if (simulatorEffect != EFFECT_FLASH) {
-        simulatorEffect = EFFECT_FLASH;
-        mlslighteffects.setLightData(millis(), (LIGHT_PACKET){EFFECT_PROGRESS_RAINBOW, MODIFIER_REPEAT, millis(), 500, 0, 0, 255, 0, 12, 5, 12, 0, 255, 0, 12, 5, 12}); // RAINBOW 500
-      }
-    } else {
-        simulatorEffect = EFFECT_NONE;
-    }
-    
-    if (simulatorEffect == EFFECT_NONE) {
-      uint32_t simulatorBeat = (millis() / simulatorBeatSpeed);
-      if (simulatorLastBeat != simulatorBeat) {
-        simulatorLastBeat = simulatorBeat;
-        DEBUG_PRINT("Simulated beat packet: ");
-        DEBUG_PRINT(simulatorBeat);
-        DEBUG_PRINT(" uxTaskGetStackHighWaterMark: ");
-        DEBUG_PRINTLN(uxTaskGetStackHighWaterMark(TaskUpdateLightHandle));
-        //if (0 == (simulatorBeat %2 )) {
-          mlslighteffects.setLightData(simulatorBeat, (LIGHT_PACKET){EFFECT_FLASH, MODIFIER_FLIP_FLOP, simulatorBeat, 0, 0, 255, 0, 0, 0, 3, 35, 0, 255, 0, 0, 3, 35}); // RED/GREEN FLASH FLIP-FLOP
-        //} else {
-        //}
-      }
-    }
-*/
 
     simulatorBeat = (millis() / simulatorBeatSpeed);
 
@@ -1249,27 +1585,76 @@ void loop() {
     #endif
 
     #ifdef ARDUINO_TTGO_LoRa32_v21new
-      if (0 != loraCommand) {
-        light_packet = (LIGHT_PACKET){EFFECT_FLASH, MODIFIER_FLIP_FLOP, millis(), 0, 0, 255, 0, 0, 0, 3, 35, 0, 255, 0, 0, 3, 35}; // RED/GREEN FLASH FLIP-FLOP
-        mlslighteffects.setLightData(millis(), light_packet);
-        boolean sendResult = sendMeshPacket(MLS_TYPE_LIGHT_DATA, millis(), (uint8_t *) &light_packet);
-        DEBUG_PRINT("LOOP: STATE_RUNNING: LoRa: loraCommand: ");
+      if (0 != loraReceived) {
+
+        lastCommand = cmd_to_send;
+        lastCommandSenderId = my_device.id;
+        lastCommandPacketId = mlsmeshLastPackedId;
+
+        if (!MLS_masterMode) {
+          // Send the command as in an ACK LIGHT packet
+          light_packet = (LIGHT_PACKET){lastCommand, 0, millis(), 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+          mlsmesh_send_packet(MLS_TYPE_ACK_LIGHT_DATA, (uint8_t *) &light_packet);
+          DEBUG_PRINT("MLS_TYPE_ACK_LIGHT_DATA packet sent based on LoRa, command: ");
+          DEBUG_PRINTLN(cmd_to_send);
+        } else {
+          // Command synced with bass drum
+          if ((lastCommand >= 100) && (lastCommand <= 199)) {
+            current_beat_effect = lastCommand;
+          } else {
+            // Direct command 
+            if (EFFECT_CHECK == lastCommand) {
+              light_packet = (LIGHT_PACKET){lastCommand, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+            } else {
+              light_packet = (LIGHT_PACKET){lastCommand, 0, millis(), 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+            }
+            boolean sendResult = mlsmesh_send_packet(MLS_TYPE_LIGHT_DATA, (uint8_t *) &light_packet);
+            DEBUG_PRINT("MLS_TYPE_LIGHT_DATA packet sent based on LoRa, command: ");
+            DEBUG_PRINTLN(cmd_to_send);
+            mlslighteffects.setLightData(millis(), &light_packet); // Max latency: 39000, not used yet.
+            current_beat_effect = EFFECT_KEEP_ALIVE;
+          }
+        }
+        
+        if (!MLS_remoteControl) {
+          DEBUG_PRINTLN("Send BLE info back through Lora");
+          LoRa.beginPacket(LORA_IMPLICIT_HEADER);
+          LoRa.print("253" + loraCommand); // SendAck
+          LoRa.endPacket(false); // Do NOT send asynchronously
+          LoRa.receive();
+        }
+
+        DEBUG_PRINT("LOOP: STATE_RUNNING: LoRa: loraReceived and resent: ");
+        DEBUG_PRINT(loraReceived);
+        DEBUG_PRINT(" loraCommand: ");
         DEBUG_PRINTLN(loraCommand);
-        loraCommand = 0;
+        loraReceived = 0;
+
+        if (cmd_to_send == EFFECT_REBOOT) {
+          delay(500);
+          ESP.restart();
+        }
       }
     #endif
 
     // Bluetooth LE handling
     #ifdef BLE_SERVER
       if (MLS_remoteControl) {
-        // BLE notification
-        if (simulatorLastBeat != simulatorBeat) {
-          if (deviceConnected) {
-            char cstr[16];
-            itoa(announced_devices + simulatorBeat, cstr, 10);
-            // pTxCharacteristic->setValue(&simulatorBeat, 1);
-            pTxCharacteristic->setValue((uint8_t*)&cstr, strlen(cstr));
+        // BLE notification : announced devices, current packet and last effect sent
+        if (deviceConnected) {
+          if ((millis() - lastBleNotificationTS) > BLE_NOTIF_HEARTBEAT_MS) {
+            lastBleNotificationTS = millis();
+            itoa(announced_devices, tempStr, 10);
+            strcpy(bleFeedback, tempStr);
+            strcat(bleFeedback, ",");
+            strcat(bleFeedback, bleLastCmdInfo);
+            strcat(bleFeedback, ",");
+            itoa(mlsmeshLastPackedId, tempStr, 10);
+            strcat(bleFeedback, tempStr);
+            pTxCharacteristic->setValue((uint8_t*)&bleFeedback, strlen(bleFeedback));
             pTxCharacteristic->notify();
+            DEBUG_PRINT("LOOP: STATE_RUNNING: BLE: notified ");
+            DEBUG_PRINTLN(bleFeedback);
           }
         }
 
@@ -1285,17 +1670,56 @@ void loop() {
         // connecting
         // do stuff here on connecting
           oldDeviceConnected = deviceConnected;
+          DEBUG_PRINTLN("LOOP: STATE_RUNNING: BLE: connecting device");
         }
       }
     #endif
 
-
-    if (simulatorLastBeat != simulatorBeat) {
-      simulatorLastBeat = simulatorBeat;
-    }
-
-    lastState = state;
+    #ifdef DEBUG_MLS
+      #ifdef MLS_DEMO
+        if (millis() - startStateRunningTS < (( (4*5) * 4) * 1000)) {
+          if (simulatorLastBeat != simulatorBeat) {
+            if (MLS_masterMode) {
+              demoStep = (int(simulatorBeat / (4*5)) % 4);
+              switch (demoStep) {
+                case 0:
+                  light_packet = (LIGHT_PACKET){EFFECT_HEARTBEAT, 0, millis(), simulatorBeatSpeed, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}; // HEARTBEAT
+                  mlslighteffects.setLightData(simulatorBeat, &light_packet);
+                  sendResult = mlsmesh_send_packet(MLS_TYPE_LIGHT_DATA, (uint8_t *) &light_packet);
+                  break;
+                case 1:
+                  if (0 == (simulatorBeat % 5)) {
+                    light_packet = (LIGHT_PACKET){EFFECT_BREATH, 0, millis(), 5 * simulatorBeatSpeed, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}; // BLUE BREATH
+                    mlslighteffects.setLightData(simulatorBeat, &light_packet);
+                    sendResult = mlsmesh_send_packet(MLS_TYPE_LIGHT_DATA, (uint8_t *) &light_packet);
+                  }
+                  break;
+                case 2:
+                  light_packet = (LIGHT_PACKET){EFFECT_CHECK, 0, simulatorBeat, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}; // CHECK
+                  mlslighteffects.setLightData(simulatorBeat, &light_packet);
+                  sendResult = mlsmesh_send_packet(MLS_TYPE_LIGHT_DATA, (uint8_t *) &light_packet);
+                  break;
+                case 3:
+                  light_packet = (LIGHT_PACKET){EFFECT_FLASH_ALTERNATE, MODIFIER_FLIP_FLOP, simulatorBeat, 0, 0, 0, 0, 0, 0, 3, 35, 0, 0, 0, 0, 3, 35}; // RED/GREEN FLASH FLIP-FLOP
+                  mlslighteffects.setLightData(simulatorBeat, &light_packet);
+                  sendResult = mlsmesh_send_packet(MLS_TYPE_LIGHT_DATA, (uint8_t *) &light_packet);
+                  break;
+                default:
+                  break;
+              }
+            }
+            simulatorLastBeat = simulatorBeat;
+          }
+        } else {
+          light_packet = (LIGHT_PACKET){EFFECT_BLANK, 0, simulatorBeat, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}; // CHECK
+          mlslighteffects.setLightData(simulatorBeat, &light_packet);
+          sendResult = mlsmesh_send_packet(MLS_TYPE_LIGHT_DATA, (uint8_t *) &light_packet);
+          break;
+        }
+      #endif // MLS_DEMO
+    #endif // DEBUG_MLS
   }
+  lastState = state; // Memorize the current state of the state machine in the lastState variable
 
   yield();
 

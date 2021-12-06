@@ -30,8 +30,9 @@
       char ssid[SSID_CHAR_SIZE];
       char secret[SECRET_CHAR_SIZE];
       MlsOta(String ota_url, String actual_firmware);
-      bool checkOtaUpdates(String ota_iid);
+      boolean checkOtaUpdates(String ota_iid);
       void otaUpdates();
+      void otaUpdates(boolean forced);
       String otaDownloadOptions(MlsTools::Config config);
       String urlencode(String str);
   };
