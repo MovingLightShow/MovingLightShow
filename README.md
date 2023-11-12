@@ -34,6 +34,8 @@ The bass drum player must have a separate device like any other players.
 This package is the result of a *LOT* of work. If you are happy using this
 package, contact us for a donation to support this project.
 
+![image](https://github.com/MovingLightShow/MovingLightShow/assets/92583101/a65fa832-2351-4a67-8d60-431ef3c41ef3)
+
 ---
 
 This library is free software; you can redistribute it and/or
